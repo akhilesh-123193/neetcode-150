@@ -1,11 +1,11 @@
 import { getStore } from '@netlify/blobs'
-
-const starterProblems = [
-  ['Two Sum', 'Easy'], ['Valid Anagram', 'Easy'], ['Group Anagrams', 'Medium'], ['Top K Frequent Elements', 'Medium'], ['Product of Array Except Self', 'Medium'], ['Valid Sudoku', 'Medium'], ['Contains Duplicate', 'Easy']
-].map(([title, difficulty], index) => ({ id: index + 1, title, category: 'Arrays & Hashing', difficulty, url: '', status: 'new', repetitions: 0, nextReview: null, plannedDate: null }))
+import { starterProblems } from '../../shared/neetcode150.js'
 
 async function getData(store) {
-  return await store.get('state', { type: 'json' }) ?? { problems: starterProblems, activity: {} }
+  const data = await store.get('state', { type: 'json' })
+  if (!data) return { problems: starterProblems, activity: {} }
+  const knownTitles = new Set(data.problems.map(problem => problem.title))
+  return { problems: [...data.problems, ...starterProblems.filter(problem => !knownTitles.has(problem.title))], activity: data.activity ?? {} }
 }
 
 function json(body, status = 200) {
@@ -25,6 +25,14 @@ export default async request => {
     data.problems.push(problem)
     await store.setJSON('state', data)
     return json(problem, 201)
+  }
+
+  if (request.method === 'POST' && route === '/activity') {
+    const { date } = await request.json()
+    if (!date) return json({ error: 'Date is required' }, 400)
+    data.activity[date] = (data.activity[date] ?? 0) + 1
+    await store.setJSON('state', data)
+    return json({ date, count: data.activity[date] })
   }
 
   const match = route.match(/^\/problems\/(\d+)$/)

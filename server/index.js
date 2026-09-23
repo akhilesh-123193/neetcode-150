@@ -2,6 +2,7 @@ import express from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { starterProblems } from '../shared/neetcode150.js'
 
 const app = express()
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
@@ -9,13 +10,11 @@ const dataFile = path.join(currentDir, 'data.json')
 
 app.use(express.json())
 
-const starterProblems = [
-  ['Two Sum', 'Easy'], ['Valid Anagram', 'Easy'], ['Group Anagrams', 'Medium'], ['Top K Frequent Elements', 'Medium'], ['Product of Array Except Self', 'Medium'], ['Valid Sudoku', 'Medium'], ['Contains Duplicate', 'Easy']
-].map(([title, difficulty], index) => ({ id: index + 1, title, category: 'Arrays & Hashing', difficulty, url: '', status: 'new', repetitions: 0, nextReview: null, plannedDate: null }))
-
 function readData() {
   if (!fs.existsSync(dataFile)) return { problems: starterProblems, activity: {} }
-  return JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+  const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+  const knownTitles = new Set(data.problems.map(problem => problem.title))
+  return { problems: [...data.problems, ...starterProblems.filter(problem => !knownTitles.has(problem.title))], activity: data.activity ?? {} }
 }
 function writeData(data) { fs.writeFileSync(dataFile, JSON.stringify(data, null, 2)) }
 
@@ -34,6 +33,14 @@ app.patch('/api/problems/:id', (req, res) => {
   Object.assign(problem, req.body)
   writeData(data)
   res.json(problem)
+})
+app.post('/api/activity', (req, res) => {
+  const data = readData()
+  const date = req.body.date
+  if (!date) return res.status(400).json({ error: 'Date is required' })
+  data.activity[date] = (data.activity[date] ?? 0) + 1
+  writeData(data)
+  res.json({ date, count: data.activity[date] })
 })
 
 app.listen(3001, () => console.log('API running on http://localhost:3001'))
