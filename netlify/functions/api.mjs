@@ -14,8 +14,8 @@ function json(body, status = 200) {
 
 export default async request => {
   const url = new URL(request.url)
-  const route = url.pathname.replace('/.netlify/functions/api', '') || '/'
-  const store = getStore({ name: 'recall-data', consistency: 'strong' })
+  const route = url.pathname.replace(/^\/.netlify\/functions\/api/, '').replace(/^\/api/, '') || '/'
+  const store = getStore('recall-data', { consistency: 'strong' })
 
   if (request.method === 'GET' && route === '/state') return json(await getData(store))
 

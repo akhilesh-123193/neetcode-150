@@ -21,7 +21,7 @@ function App() {
   const [toast, setToast] = useState('')
   const [dark, setDark] = useState(() => localStorage.getItem('recall-theme') === 'dark')
 
-  useEffect(() => { fetch('/api/state').then(response => response.json()).then(data => { setProblems(data.problems); setActivity(data.activity) }).catch(() => {}) }, [])
+  useEffect(() => { fetch('/api/state').then(response => { if (!response.ok) throw new Error('Could not load your study data'); return response.json() }).then(data => { if (!Array.isArray(data.problems)) throw new Error('Invalid study data'); setProblems(data.problems); setActivity(data.activity ?? {}) }).catch(() => showToast('Your dashboard loaded, but saved data is temporarily unavailable.')) }, [])
   useEffect(() => { localStorage.setItem('recall-theme', dark ? 'dark' : 'light') }, [dark])
   const due = useMemo(() => problems.filter(problem => problem.repetitions > 0 && problem.nextReview && problem.nextReview <= today).sort((left, right) => left.nextReview.localeCompare(right.nextReview)).slice(0, 2), [problems])
   const todayPlan = useMemo(() => problems.filter(problem => problem.plannedDate === today && problem.status === 'new'), [problems])
