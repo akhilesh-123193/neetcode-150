@@ -52,13 +52,28 @@ app.patch("/api/problems/:id", (req, res) => {
   writeData(data);
   res.json(problem);
 });
+app.delete("/api/problems/:id", (req, res) => {
+  const data = readData();
+  const id = Number(req.params.id);
+  const index = data.problems.findIndex((item) => item.id === id);
+  if (index === -1) return res.status(404).json({ error: "Problem not found" });
+  data.problems.splice(index, 1);
+  writeData(data);
+  res.json({ success: true, id });
+});
 app.post("/api/activity", (req, res) => {
   const data = readData();
   const date = req.body.date;
+  const delta = typeof req.body.delta === "number" ? req.body.delta : 1;
   if (!date) return res.status(400).json({ error: "Date is required" });
-  data.activity[date] = (data.activity[date] ?? 0) + 1;
+  const newCount = Math.max(0, (data.activity[date] ?? 0) + delta);
+  if (newCount === 0) {
+    delete data.activity[date];
+  } else {
+    data.activity[date] = newCount;
+  }
   writeData(data);
-  res.json({ date, count: data.activity[date] });
+  res.json({ date, count: data.activity[date] ?? 0 });
 });
 
 app.listen(3001, () => console.log("API running on http://localhost:3001"));

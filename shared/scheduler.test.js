@@ -6,6 +6,8 @@ import {
   buildReviewSchedule,
   calculateStreak,
   getDueReviews,
+  getNextReviewDate,
+  intervals,
 } from "./scheduler.js";
 
 const today = "2026-09-23";
@@ -76,4 +78,17 @@ test("uses actual activity values for heatmap intensity", () => {
     heatmap.map((item) => item.level),
     [1, 4],
   );
+});
+
+test("calculates accurate next review dates without UTC timezone shift", () => {
+  assert.equal(getNextReviewDate(today, 0), "2026-09-24"); // 1d
+  assert.equal(getNextReviewDate(today, 1), "2026-09-26"); // 3d
+  assert.equal(getNextReviewDate(today, 2), "2026-09-30"); // 7d
+  assert.equal(getNextReviewDate(today, 3), "2026-10-07"); // 14d
+  assert.equal(getNextReviewDate(today, 4), "2026-10-23"); // 30d
+});
+
+test("caps maximum interval at the last defined repetition interval", () => {
+  const maxInterval = intervals[intervals.length - 1];
+  assert.equal(getNextReviewDate(today, 10), addDays(today, maxInterval));
 });

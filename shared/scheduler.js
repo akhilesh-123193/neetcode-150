@@ -3,6 +3,13 @@ export function toDateKey(date) {
   return `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}-${String(localDate.getDate()).padStart(2, "0")}`;
 }
 
+export const intervals = [1, 3, 7, 14, 30, 60];
+
+export function getNextReviewDate(today, repetitions) {
+  const step = Math.min(Math.max(0, repetitions), intervals.length - 1);
+  return addDays(today, intervals[step]);
+}
+
 export function addDays(dateKey, days) {
   const date = new Date(`${dateKey}T12:00:00`);
   date.setDate(date.getDate() + days);

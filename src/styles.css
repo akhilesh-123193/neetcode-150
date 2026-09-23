@@ -1335,3 +1335,332 @@ h1 span {
     display: none;
   }
 }
+
+/* --- New styles for Undo, Learning Path, and Table Actions --- */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  min-width: 280px;
+  max-width: 440px;
+}
+.toast-undo {
+  margin-left: auto;
+  border: 0;
+  border-radius: 6px;
+  background: var(--orange);
+  color: #fff;
+  font: 700 11px inherit;
+  padding: 5px 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: opacity 0.15s;
+}
+.toast-undo:hover {
+  opacity: 0.9;
+}
+.undo-button {
+  border: 1px solid #e2ded8;
+  background: #fbfaf8;
+  color: #635f5a;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: 600 11px inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s;
+}
+.undo-button:hover {
+  border-color: #d1cbc3;
+  background: #f4f1ec;
+  color: #242324;
+}
+.reset-button {
+  border: 0;
+  background: none;
+  color: #a49f99;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 500 11px inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.reset-button:hover {
+  color: #dc3545;
+  background: #fff0f0;
+}
+.reviewed-card {
+  border-color: #d2ecd9;
+  background: #f9fdfa;
+}
+.reviewed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 600 10px "DM Mono", monospace;
+  color: #2b8460;
+  background: #e8f7ee;
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+.reviewed-today-section {
+  margin-top: 24px;
+}
+.reviewed-today-section h3 {
+  font-size: 13px;
+  color: #7b7874;
+  margin: 0 0 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.daily-completed-banner {
+  background: #f1f9f4;
+  border: 1px solid #c9ebd4;
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.daily-completed-banner strong {
+  display: block;
+  font-size: 14px;
+  color: #236948;
+}
+.daily-completed-banner p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #4b8c6a;
+}
+.daily-completed-banner button {
+  border: 1px solid #bde4cb;
+  background: #fff;
+  color: #236948;
+  font: 600 12px inherit;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.table-actions button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: 600 11px inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink);
+}
+.table-actions button:hover {
+  background: #f9f8f6;
+}
+.table-actions button.primary-action {
+  background: var(--violet);
+  color: #fff;
+  border-color: var(--violet);
+}
+.table-actions button.primary-action:hover {
+  opacity: 0.92;
+}
+.table-actions button.again-action {
+  background: #fff4ec;
+  color: var(--orange);
+  border-color: #ffd8c7;
+}
+.table-actions button.remember-action {
+  background: #eff9f4;
+  color: #258461;
+  border-color: #d0edd9;
+}
+.learning-path-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+.learning-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.learning-card:hover {
+  box-shadow: 0 4px 16px #0000000a;
+}
+.learning-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.learning-card-header h3 {
+  margin: 0;
+  font: 600 16px Fraunces, serif;
+}
+.learning-card-header span {
+  font: 500 11px "DM Mono", monospace;
+  color: var(--muted);
+}
+.learning-card-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.learning-progress-bar {
+  height: 7px;
+  background: #f0eeea;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+}
+.learning-progress-bar .bar-mastered {
+  background: var(--violet);
+}
+.learning-progress-bar .bar-learning {
+  background: var(--orange);
+}
+.learning-stats-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+.learning-difficulties {
+  display: flex;
+  gap: 8px;
+}
+.diff-tag {
+  font: 500 10px "DM Mono", monospace;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.diff-tag.easy {
+  background: #eef8f2;
+  color: #2e8b63;
+}
+.diff-tag.medium {
+  background: #fff7eb;
+  color: #c97d1e;
+}
+.diff-tag.hard {
+  background: #fef0f0;
+  color: #cf3d3d;
+}
+.learning-card-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.learning-card-footer button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 7px;
+  padding: 7px 12px;
+  font: 600 12px inherit;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.learning-card-footer button:hover {
+  background: #f7f6f3;
+}
+.calendar-day.selected-day {
+  border: 2px solid var(--violet);
+  background: #f9f8ff;
+}
+.calendar-day {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.calendar-day:hover {
+  background: #faf8f5;
+}
+.dark .reviewed-card {
+  background: #1c2b22;
+  border-color: #2c4c37;
+}
+.dark .reviewed-badge {
+  background: #233e2f;
+  color: #6ed09e;
+}
+.dark .daily-completed-banner {
+  background: #1e2c24;
+  border-color: #2f4e39;
+}
+.dark .daily-completed-banner strong {
+  color: #8ce4b7;
+}
+.dark .daily-completed-banner p {
+  color: #72ab8e;
+}
+.dark .daily-completed-banner button {
+  background: #293d31;
+  color: #a2ebd0;
+  border-color: #406951;
+}
+.dark .undo-button {
+  background: #2b2c34;
+  border-color: #41424b;
+  color: #c8c8cf;
+}
+.dark .undo-button:hover {
+  background: #373842;
+  color: #f0f0f4;
+}
+.dark .learning-card {
+  background: #202126;
+  border-color: #34353e;
+}
+.dark .learning-progress-bar {
+  background: #2e2f38;
+}
+.dark .calendar-day.selected-day {
+  border-color: #9283f5;
+  background: #2a2839;
+}
+.dark .calendar-day:hover {
+  background: #282931;
+}
+.dark .table-actions button {
+  background: #292a31;
+  border-color: #41424b;
+  color: #c8c8cf;
+}
+.dark .table-actions button:hover {
+  background: #353641;
+}
+.dark .learning-card-footer button {
+  background: #292a31;
+  border-color: #41424b;
+  color: #c8c8cf;
+}
+

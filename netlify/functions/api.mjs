@@ -48,11 +48,16 @@ export default async (request) => {
   }
 
   if (request.method === "POST" && route === "/activity") {
-    const { date } = await request.json();
+    const { date, delta = 1 } = await request.json();
     if (!date) return json({ error: "Date is required" }, 400);
-    data.activity[date] = (data.activity[date] ?? 0) + 1;
+    const newCount = Math.max(0, (data.activity[date] ?? 0) + delta);
+    if (newCount === 0) {
+      delete data.activity[date];
+    } else {
+      data.activity[date] = newCount;
+    }
     await store.setJSON("state", data);
-    return json({ date, count: data.activity[date] });
+    return json({ date, count: data.activity[date] ?? 0 });
   }
 
   const match = route.match(/^\/problems\/(\d+)$/);
@@ -62,6 +67,15 @@ export default async (request) => {
     Object.assign(problem, await request.json());
     await store.setJSON("state", data);
     return json(problem);
+  }
+
+  if (request.method === "DELETE" && match) {
+    const id = Number(match[1]);
+    const index = data.problems.findIndex((item) => item.id === id);
+    if (index === -1) return json({ error: "Problem not found" }, 404);
+    data.problems.splice(index, 1);
+    await store.setJSON("state", data);
+    return json({ success: true, id });
   }
 
   return json({ error: "Not found" }, 404);
