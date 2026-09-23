@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleHelp,
   Code2,
+  FileCode2,
   Flame,
   Grid2X2,
   Home,
@@ -82,6 +83,8 @@ function App() {
   const [activity, setActivity] = useState({});
   const [activePage, setActivePage] = useState("Dashboard");
   const [filter, setFilter] = useState("All topics");
+  const [difficultyFilter, setDifficultyFilter] = useState("All");
+  const [activeNotesProblem, setActiveNotesProblem] = useState(null);
   const [query, setQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -181,9 +184,11 @@ function App() {
       problems.filter(
         (problem) =>
           (filter === "All topics" || problem.category === filter) &&
+          (difficultyFilter === "All" ||
+            problem.difficulty === difficultyFilter) &&
           problem.title.toLowerCase().includes(query.toLowerCase()),
       ),
-    [problems, filter, query],
+    [problems, filter, difficultyFilter, query],
   );
 
   const streak = useMemo(() => calculateStreak(activity, today), [activity]);
@@ -489,11 +494,15 @@ function App() {
     ) : (
       <ProblemsPage
         problems={filtered}
+        allProblems={problems}
         totalCount={problems.length}
         filter={filter}
+        difficultyFilter={difficultyFilter}
+        setDifficultyFilter={setDifficultyFilter}
         query={query}
         setFilter={setFilter}
         setModalOpen={setModalOpen}
+        onOpenNotes={(problem) => setActiveNotesProblem(problem)}
         review={review}
         undoReview={undoReview}
         planProblem={planProblem}
@@ -577,6 +586,21 @@ function App() {
 
       {modalOpen && (
         <AddProblem onClose={() => setModalOpen(false)} onAdd={addProblem} />
+      )}
+
+      {activeNotesProblem && (
+        <ProblemNotesModal
+          problem={activeNotesProblem}
+          onClose={() => setActiveNotesProblem(null)}
+          onSave={(problemId, updates) => {
+            const p = problems.find((item) => item.id === problemId);
+            if (p) {
+              updateProblem(p, updates);
+              showToast(`Saved notes & solution for "${p.title}".`);
+            }
+            setActiveNotesProblem(null);
+          }}
+        />
       )}
 
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
@@ -1377,11 +1401,15 @@ function LearningPath({ problems, setActivePage, setFilter }) {
 
 function ProblemsPage({
   problems,
+  allProblems,
   totalCount,
   filter,
+  difficultyFilter,
+  setDifficultyFilter,
   query,
   setFilter,
   setModalOpen,
+  onOpenNotes,
   review,
   undoReview,
   planProblem,
@@ -1389,6 +1417,18 @@ function ProblemsPage({
   resetProblem,
   today,
 }) {
+  const diffStats = useMemo(() => {
+    const list = ["Easy", "Medium", "Hard"];
+    return list.map((diff) => {
+      const matching = (allProblems || []).filter((p) => p.difficulty === diff);
+      const total = matching.length;
+      const solved = matching.filter((p) => p.solvedAt).length;
+      const mastered = matching.filter((p) => p.status === "mastered").length;
+      const percent = total ? Math.round((solved / total) * 100) : 0;
+      return { diff, total, solved, mastered, percent };
+    });
+  }, [allProblems]);
+
   return (
     <section className="page problems-page">
       <div className="greeting-row">
@@ -1396,8 +1436,9 @@ function ProblemsPage({
           <p className="eyebrow">YOUR LIBRARY</p>
           <h1>My problems</h1>
           <p className="muted">
-            Browse all {totalCount} curated problems. Add them to today’s solve
-            list or practice them anytime.
+            Browse all {totalCount} curated problems. Filter by topic or
+            difficulty, add notes and Python solutions, and manage your solve
+            queue.
           </p>
         </div>
         <button className="primary" onClick={() => setModalOpen(true)}>
@@ -1406,22 +1447,79 @@ function ProblemsPage({
         </button>
       </div>
 
-      <div className="filters">
-        {topics.map((topic) => (
-          <button
-            key={topic}
-            onClick={() => setFilter(topic)}
-            className={filter === topic ? "selected" : ""}
-          >
-            {topic}
-          </button>
-        ))}
+      {/* Difficulty Overview Section */}
+      <div className="difficulty-section">
+        {diffStats.map((item) => {
+          const isSelected = difficultyFilter === item.diff;
+          return (
+            <div
+              key={item.diff}
+              className={`diff-stat-card ${item.diff.toLowerCase()}-card ${isSelected ? "selected" : ""}`}
+              onClick={() =>
+                setDifficultyFilter((curr) => (curr === item.diff ? "All" : item.diff))
+              }
+              title={`Click to filter by ${item.diff} problems`}
+            >
+              <div className="diff-card-header">
+                <strong>{item.diff}</strong>
+                <span>
+                  {item.solved} / {item.total} solved
+                </span>
+              </div>
+              <div className="diff-card-progress">
+                <i style={{ width: `${item.percent}%` }} />
+              </div>
+              <div className="diff-card-stats">
+                <span>{item.percent}% solved</span>
+                <span>{item.mastered} mastered</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      {query && (
+      <div className="filter-row">
+        {/* Difficulty Filter Pills */}
+        <div className="difficulty-filter-bar">
+          <span className="difficulty-filter-label">Difficulty:</span>
+          {["All", "Easy", "Medium", "Hard"].map((diff) => {
+            const count =
+              diff === "All"
+                ? (allProblems || []).length
+                : (allProblems || []).filter((p) => p.difficulty === diff).length;
+            const isSelected = difficultyFilter === diff;
+            return (
+              <button
+                key={diff}
+                className={`difficulty-pill ${diff.toLowerCase()}-pill ${isSelected ? "selected" : ""}`}
+                onClick={() => setDifficultyFilter(diff)}
+              >
+                {diff === "All" ? "All difficulties" : diff} <small>({count})</small>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Topic Filters */}
+        <div className="filters">
+          {topics.map((topic) => (
+            <button
+              key={topic}
+              onClick={() => setFilter(topic)}
+              className={filter === topic ? "selected" : ""}
+            >
+              {topic}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {(query || filter !== "All topics" || difficultyFilter !== "All") && (
         <p className="muted" style={{ margin: "0 0 16px" }}>
-          Showing {problems.length} result{problems.length === 1 ? "" : "s"} for
-          “{query}”
+          Showing {problems.length} problem{problems.length === 1 ? "" : "s"}
+          {filter !== "All topics" ? ` in ${filter}` : ""}
+          {difficultyFilter !== "All" ? ` • ${difficultyFilter}` : ""}
+          {query ? ` matching “${query}”` : ""}
         </p>
       )}
 
@@ -1441,6 +1539,9 @@ function ProblemsPage({
             problem.nextReview && problem.nextReview <= today,
           );
           const wasReviewedToday = problem.lastReviewed === today;
+          const hasNotes = Boolean(
+            problem.pythonCode || problem.timeComplexity || problem.notes,
+          );
 
           return (
             <div className="table-row" key={problem.id}>
@@ -1451,6 +1552,18 @@ function ProblemsPage({
                     <ArrowUpRight size={14} />
                   </a>
                 )}
+                <span className="problem-tags">
+                  {problem.timeComplexity && (
+                    <span className="complexity-tag" title="Time Complexity">
+                      {problem.timeComplexity}
+                    </span>
+                  )}
+                  {problem.pythonCode && (
+                    <span className="code-tag" title="Python Solution Added">
+                      <Code2 size={11} /> Py
+                    </span>
+                  )}
+                </span>
               </div>
               <span>{problem.category}</span>
               <span className={`status ${problem.status}`}>
@@ -1471,6 +1584,15 @@ function ProblemsPage({
               </span>
 
               <div className="table-actions">
+                <button
+                  className={`notes-btn ${hasNotes ? "has-notes" : ""}`}
+                  onClick={() => onOpenNotes(problem)}
+                  title="View / Edit Python code & notes"
+                >
+                  <FileCode2 size={13} />
+                  {hasNotes ? "Notes ✓" : "Notes"}
+                </button>
+
                 {problem.status === "new" ? (
                   <>
                     <button
@@ -1530,6 +1652,155 @@ function ProblemsPage({
         })}
       </div>
     </section>
+  );
+}
+
+function ProblemNotesModal({ problem, onClose, onSave }) {
+  const [pythonCode, setPythonCode] = useState(problem.pythonCode || "");
+  const [timeComplexity, setTimeComplexity] = useState(
+    problem.timeComplexity || "",
+  );
+  const [spaceComplexity, setSpaceComplexity] = useState(
+    problem.spaceComplexity || "",
+  );
+  const [notes, setNotes] = useState(problem.notes || "");
+
+  const commonTime = [
+    "O(1)",
+    "O(log n)",
+    "O(n)",
+    "O(n log n)",
+    "O(n²)",
+    "O(2ⁿ)",
+  ];
+  const commonSpace = ["O(1)", "O(log n)", "O(n)", "O(n²)"];
+
+  function handleKeyDown(e) {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const target = e.target;
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      const val = target.value;
+      target.value = val.substring(0, start) + "    " + val.substring(end);
+      target.selectionStart = target.selectionEnd = start + 4;
+      setPythonCode(target.value);
+    }
+  }
+
+  function submit(e) {
+    e.preventDefault();
+    onSave(problem.id, {
+      pythonCode,
+      timeComplexity,
+      spaceComplexity,
+      notes,
+    });
+  }
+
+  const defaultSnippet = `# Python 3 Solution for ${problem.title}
+class Solution:
+    def solve(self, *args, **kwargs):
+        # Time: ${timeComplexity || "O(n)"}, Space: ${spaceComplexity || "O(1)"}
+        pass
+`;
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form
+        className="modal notes-modal"
+        onSubmit={submit}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="modal-title">
+          <div>
+            <p className="eyebrow">
+              {problem.category} • {problem.difficulty}
+            </p>
+            <h2>{problem.title} — Notes & Solution</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose}>
+            <X size={19} />
+          </button>
+        </div>
+
+        <div className="complexity-row">
+          <label>
+            Time Complexity
+            <input
+              value={timeComplexity}
+              onChange={(e) => setTimeComplexity(e.target.value)}
+              placeholder="e.g. O(n) or O(n log n)"
+            />
+            <div className="chip-row">
+              {commonTime.map((chip) => (
+                <button
+                  type="button"
+                  key={chip}
+                  className={`chip ${timeComplexity === chip ? "active" : ""}`}
+                  onClick={() => setTimeComplexity(chip)}
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </label>
+
+          <label>
+            Space Complexity
+            <input
+              value={spaceComplexity}
+              onChange={(e) => setSpaceComplexity(e.target.value)}
+              placeholder="e.g. O(1) or O(n)"
+            />
+            <div className="chip-row">
+              {commonSpace.map((chip) => (
+                <button
+                  type="button"
+                  key={chip}
+                  className={`chip ${spaceComplexity === chip ? "active" : ""}`}
+                  onClick={() => setSpaceComplexity(chip)}
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </label>
+        </div>
+
+        <div className="code-editor-wrap">
+          <label>
+            Python Solution Code
+            <textarea
+              value={pythonCode}
+              onChange={(e) => setPythonCode(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={defaultSnippet}
+              spellCheck={false}
+            />
+          </label>
+        </div>
+
+        <label>
+          Approach, Key Patterns & Edge Cases
+          <textarea
+            className="notes-textarea"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. Two-pointer technique from opposite ends. Handle duplicate elements..."
+          />
+        </label>
+
+        <div className="notes-actions">
+          <button type="button" className="undo-button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary">
+            <Check size={16} /> Save Notes & Code
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
