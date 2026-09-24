@@ -19,4 +19,45 @@ const catalog = [
   ['Bit Manipulation', [['Single Number','Easy'],['Number of 1 Bits','Easy'],['Counting Bits','Easy'],['Reverse Bits','Easy'],['Missing Number','Easy'],['Sum of Two Integers','Medium'],['Reverse Integer','Medium']]]
 ]
 
-export const starterProblems = catalog.flatMap(([category, problems]) => problems.map(([title, difficulty]) => ({ title, category, difficulty }))).map((problem, index) => ({ id: index + 1, ...problem, url: '', status: 'new', repetitions: 0, nextReview: null, plannedDate: null, solvedAt: null }))
+export function getLeetCodeUrl(title) {
+  const customSlugs = {
+    "Two Sum II - Input Array Is Sorted": "two-sum-ii-input-array-is-sorted",
+    "Encode and Decode Strings": "encode-and-decode-strings",
+    "Non-overlapping Intervals": "non-overlapping-intervals",
+    "Number of 1 Bits": "number-of-1-bits",
+    "Reverse Nodes in k-Group": "reverse-nodes-in-k-group",
+    "Kth Smallest Element in a BST": "kth-smallest-element-in-a-bst",
+    "Lowest Common Ancestor of a Binary Search Tree": "lowest-common-ancestor-of-a-binary-search-tree",
+    "Merge k Sorted Lists": "merge-k-sorted-lists",
+    "Pow(x, n)": "powx-n",
+  };
+  if (customSlugs[title]) {
+    return `https://leetcode.com/problems/${customSlugs[title]}/`;
+  }
+  const slug = title
+    .toLowerCase()
+    .replace(/[()]/g, "")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+  return `https://leetcode.com/problems/${slug}/`;
+}
+
+export const starterProblems = catalog
+  .flatMap(([category, problems]) =>
+    problems.map(([title, difficulty]) => ({ title, category, difficulty })),
+  )
+  .map((problem, index) => ({
+    id: index + 1,
+    ...problem,
+    url: getLeetCodeUrl(problem.title),
+    status: "new",
+    repetitions: 0,
+    nextReview: null,
+    plannedDate: null,
+    solvedAt: null,
+    pythonCode: "",
+    timeComplexity: "",
+    spaceComplexity: "",
+    notes: "",
+  }));

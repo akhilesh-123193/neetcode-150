@@ -2026,6 +2026,293 @@ h1 span {
   .complexity-row {
     grid-template-columns: 1fr;
   }
+  .notes-drawer-content {
+    grid-template-columns: 1fr !important;
+  }
 }
+
+/* --- Direct LeetCode Problem Link --- */
+.problem-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.problem-title-link {
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.15s ease;
+}
+.problem-title-link:hover {
+  color: var(--violet);
+  text-decoration: underline;
+}
+.problem-title-link svg {
+  opacity: 0.5;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.problem-title-link:hover svg {
+  opacity: 1;
+  transform: translate(1px, -1px);
+}
+.dark .problem-title-link {
+  color: #ececf0;
+}
+.dark .problem-title-link:hover {
+  color: #a496f8;
+}
+
+/* --- Solved Problem UI Highlights --- */
+.table-row-wrapper {
+  border-bottom: 1px solid #f0eeea;
+}
+.dark .table-row-wrapper {
+  border-color: #30313a;
+}
+.table-row.is-solved {
+  background: #f4fbf7;
+  border-left: 3px solid #2e8b63;
+}
+.dark .table-row.is-solved {
+  background: #16241c;
+  border-left: 3px solid #38b17b;
+}
+.table-row.is-solved .problem-title-link {
+  color: #1e6648;
+}
+.dark .table-row.is-solved .problem-title-link {
+  color: #8be6b7;
+}
+
+.solved-check-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #bbb;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.solved-check-btn:hover {
+  color: #2e8b63;
+  transform: scale(1.1);
+}
+.solved-check-btn.checked {
+  color: #2e8b63;
+}
+.dark .solved-check-btn.checked {
+  color: #4ed997;
+}
+
+.status.solved-badge {
+  background: #def7e7;
+  color: #1f774f;
+  font-weight: 700;
+  border: 1px solid #b6ebc7;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.dark .status.solved-badge {
+  background: #1c3d2b;
+  color: #6ed09e;
+  border-color: #2e6245;
+}
+
+/* --- Status Filter Tabs --- */
+.status-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f2f0ec;
+  padding: 3px;
+  border-radius: 9px;
+  width: fit-content;
+}
+.dark .status-filter-bar {
+  background: #25262c;
+  border: 1px solid #363740;
+}
+.status-tab-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px inherit;
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.status-tab-btn:hover {
+  color: var(--ink);
+}
+.status-tab-btn.selected {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.status-tab-btn small {
+  font: 500 10px "DM Mono", monospace;
+  opacity: 0.75;
+}
+.dark .status-tab-btn:hover {
+  color: #fff;
+}
+.dark .status-tab-btn.selected {
+  background: #34353e;
+  color: #fff;
+}
+
+/* --- Inline Expandable Notes Drawer --- */
+.notes-drawer {
+  padding: 16px 20px;
+  background: #fcfbfa;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: fadeIn 0.15s ease;
+}
+.dark .notes-drawer {
+  background: #1b1c21;
+  border-color: #31323a;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.notes-drawer-content {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 16px;
+}
+.notes-code-card {
+  background: #16171c;
+  border: 1px solid #282933;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.notes-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #202127;
+  border-bottom: 1px solid #2b2c36;
+  font: 600 11px "DM Mono", monospace;
+  color: #b0b0bc;
+}
+.copy-code-btn {
+  border: 0;
+  background: #2e303a;
+  color: #e0e0ea;
+  font: 600 10px inherit;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.12s;
+}
+.copy-code-btn:hover {
+  background: #3c3e4c;
+}
+.notes-code-pre {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: "JetBrains Mono", "DM Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #d8d8e6;
+  overflow-x: auto;
+  max-height: 260px;
+  tab-size: 4;
+}
+.notes-meta-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.notes-complexities {
+  display: flex;
+  gap: 10px;
+}
+.complexity-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  border-radius: 6px;
+  flex: 1;
+}
+.dark .complexity-box {
+  background: #23242b;
+  border-color: #363742;
+}
+.complexity-box span {
+  display: block;
+  font: 500 10px "DM Mono", monospace;
+  color: var(--muted);
+}
+.complexity-box strong {
+  display: block;
+  font: 700 13px "DM Mono", monospace;
+  color: var(--violet);
+  margin-top: 2px;
+}
+.notes-approach-view {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dark .notes-approach-view {
+  background: #23242b;
+  border-color: #363742;
+}
+.notes-approach-view span {
+  font: 600 10px "DM Mono", monospace;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.notes-approach-view p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.dark .notes-approach-view p {
+  color: #dfdfe6;
+}
+.notes-drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 
 

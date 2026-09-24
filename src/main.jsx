@@ -6,10 +6,14 @@ import {
   BrainCircuit,
   CalendarDays,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
   CircleHelp,
   Code2,
+  Copy,
+  ExternalLink,
   FileCode2,
   Flame,
   Grid2X2,
@@ -36,8 +40,29 @@ import {
   getNextReviewDate,
   intervals,
 } from "../shared/scheduler.js";
-import { starterProblems } from "../shared/neetcode150.js";
+import { getLeetCodeUrl, starterProblems } from "../shared/neetcode150.js";
 import "./styles.css";
+
+function loadInitialProblems() {
+  try {
+    const saved = localStorage.getItem("recall-problems-v1");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return starterProblems;
+}
+
+function loadInitialActivity() {
+  try {
+    const saved = localStorage.getItem("recall-activity-v1");
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch {}
+  return {};
+}
 
 const topics = [
   "All topics",
@@ -79,12 +104,14 @@ const formatDate = (date) => {
 };
 
 function App() {
-  const [problems, setProblems] = useState(starterProblems);
-  const [activity, setActivity] = useState({});
+  const [problems, setProblems] = useState(loadInitialProblems);
+  const [activity, setActivity] = useState(loadInitialActivity);
   const [activePage, setActivePage] = useState("Dashboard");
   const [filter, setFilter] = useState("All topics");
   const [difficultyFilter, setDifficultyFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
   const [activeNotesProblem, setActiveNotesProblem] = useState(null);
+  const [expandedNotesId, setExpandedNotesId] = useState(null);
   const [query, setQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -111,12 +138,39 @@ function App() {
       })
       .then((data) => {
         if (Array.isArray(data.problems) && data.problems.length > 0) {
-          setProblems(data.problems);
+          setProblems((localItems) => {
+            const localMap = new Map(localItems.map((p) => [p.id, p]));
+            const merged = data.problems.map((serverProb) => {
+              const localProb = localMap.get(serverProb.id);
+              return {
+                ...serverProb,
+                url: serverProb.url || getLeetCodeUrl(serverProb.title),
+                pythonCode: serverProb.pythonCode || localProb?.pythonCode || "",
+                timeComplexity:
+                  serverProb.timeComplexity || localProb?.timeComplexity || "",
+                spaceComplexity:
+                  serverProb.spaceComplexity || localProb?.spaceComplexity || "",
+                notes: serverProb.notes || localProb?.notes || "",
+              };
+            });
+            try {
+              localStorage.setItem("recall-problems-v1", JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
         }
-        setActivity(data.activity ?? {});
+        if (data.activity) {
+          setActivity(data.activity);
+          try {
+            localStorage.setItem(
+              "recall-activity-v1",
+              JSON.stringify(data.activity),
+            );
+          } catch {}
+        }
       })
       .catch(() => {
-        showToast("Using offline library data. Changes will sync when online.");
+        // Keeps local storage data seamlessly
       });
   }, []);
 
@@ -181,14 +235,29 @@ function App() {
 
   const filtered = useMemo(
     () =>
-      problems.filter(
-        (problem) =>
-          (filter === "All topics" || problem.category === filter) &&
-          (difficultyFilter === "All" ||
-            problem.difficulty === difficultyFilter) &&
-          problem.title.toLowerCase().includes(query.toLowerCase()),
-      ),
-    [problems, filter, difficultyFilter, query],
+      problems.filter((problem) => {
+        const matchesTopic =
+          filter === "All topics" || problem.category === filter;
+        const matchesDifficulty =
+          difficultyFilter === "All" ||
+          problem.difficulty === difficultyFilter;
+        const matchesSearch = problem.title
+          .toLowerCase()
+          .includes(query.toLowerCase());
+        const isSolved = Boolean(problem.solvedAt);
+        const matchesStatus =
+          statusFilter === "All" ||
+          (statusFilter === "Solved" && isSolved) ||
+          (statusFilter === "Unsolved" && !isSolved);
+
+        return (
+          matchesTopic &&
+          matchesDifficulty &&
+          matchesSearch &&
+          matchesStatus
+        );
+      }),
+    [problems, filter, difficultyFilter, statusFilter, query],
   );
 
   const streak = useMemo(() => calculateStreak(activity, today), [activity]);
@@ -200,9 +269,16 @@ function App() {
 
   async function updateProblem(problem, patch) {
     const updated = { ...problem, ...patch };
-    setProblems((items) =>
-      items.map((item) => (item.id === problem.id ? updated : item)),
-    );
+    setProblems((items) => {
+      const next = items.map((item) =>
+        item.id === problem.id ? updated : item,
+      );
+      try {
+        localStorage.setItem("recall-problems-v1", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
     try {
       await fetch(`/api/problems/${problem.id}`, {
         method: "PATCH",
@@ -210,7 +286,7 @@ function App() {
         body: JSON.stringify(patch),
       });
     } catch {
-      // Offline fallback: state already updated locally
+      // Offline fallback: state and localStorage already updated
     }
   }
 
@@ -224,6 +300,9 @@ function App() {
       } else {
         next[today] = nextCount;
       }
+      try {
+        localStorage.setItem("recall-activity-v1", JSON.stringify(next));
+      } catch {}
       return next;
     });
 
@@ -499,6 +578,10 @@ function App() {
         filter={filter}
         difficultyFilter={difficultyFilter}
         setDifficultyFilter={setDifficultyFilter}
+        statusFilter={statusFilter}
+        setStatusFilter={setStatusFilter}
+        expandedNotesId={expandedNotesId}
+        setExpandedNotesId={setExpandedNotesId}
         query={query}
         setFilter={setFilter}
         setModalOpen={setModalOpen}
@@ -837,16 +920,15 @@ function Dashboard({
                     </div>
                     <div className="problem-info">
                       <h3>
-                        {problem.title}
-                        {problem.url && (
-                          <a
-                            href={problem.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <ArrowUpRight size={15} />
-                          </a>
-                        )}
+                        <a
+                          href={problem.url || getLeetCodeUrl(problem.title)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="problem-title-link"
+                          title={`Open "${problem.title}" on LeetCode`}
+                        >
+                          {problem.title} <ArrowUpRight size={14} />
+                        </a>
                       </h3>
                       <p>
                         {problem.category}
@@ -896,7 +978,17 @@ function Dashboard({
                         {String(problem.id).padStart(2, "0")}
                       </div>
                       <div className="problem-info">
-                        <h3>{problem.title}</h3>
+                        <h3>
+                          <a
+                            href={problem.url || getLeetCodeUrl(problem.title)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="problem-title-link"
+                            title={`Open "${problem.title}" on LeetCode`}
+                          >
+                            {problem.title} <ArrowUpRight size={14} />
+                          </a>
+                        </h3>
                         <p>
                           <span className="reviewed-badge">Solved</span>
                           Next recall scheduled:{" "}
@@ -981,7 +1073,17 @@ function Dashboard({
                         {String(problem.id).padStart(2, "0")}
                       </div>
                       <div className="problem-info">
-                        <h3>{problem.title}</h3>
+                        <h3>
+                          <a
+                            href={problem.url || getLeetCodeUrl(problem.title)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="problem-title-link"
+                            title={`Open "${problem.title}" on LeetCode`}
+                          >
+                            {problem.title} <ArrowUpRight size={14} />
+                          </a>
+                        </h3>
                         <p>
                           <span className="reviewed-badge">
                             {problem.lastReviewQuality === "again"
@@ -1078,12 +1180,15 @@ function ProblemCard({ problem, review }) {
       </div>
       <div className="problem-info">
         <h3>
-          {problem.title}
-          {problem.url && (
-            <a href={problem.url} target="_blank" rel="noreferrer">
-              <ArrowUpRight size={15} />
-            </a>
-          )}
+          <a
+            href={problem.url || getLeetCodeUrl(problem.title)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="problem-title-link"
+            title={`Open "${problem.title}" on LeetCode`}
+          >
+            {problem.title} <ArrowUpRight size={14} />
+          </a>
         </h3>
         <p>
           {problem.category}
@@ -1273,7 +1378,17 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
                     {String(problem.id).padStart(2, "0")}
                   </div>
                   <div>
-                    <strong>{problem.title}</strong>
+                    <strong>
+                      <a
+                        href={problem.url || getLeetCodeUrl(problem.title)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="problem-title-link"
+                        title={`Open "${problem.title}" on LeetCode`}
+                      >
+                        {problem.title} <ArrowUpRight size={12} />
+                      </a>
+                    </strong>
                     <span>{problem.category}</span>
                   </div>
                 </div>
@@ -1406,6 +1521,10 @@ function ProblemsPage({
   filter,
   difficultyFilter,
   setDifficultyFilter,
+  statusFilter,
+  setStatusFilter,
+  expandedNotesId,
+  setExpandedNotesId,
   query,
   setFilter,
   setModalOpen,
@@ -1429,6 +1548,12 @@ function ProblemsPage({
     });
   }, [allProblems]);
 
+  const solvedCount = useMemo(
+    () => (allProblems || []).filter((p) => p.solvedAt).length,
+    [allProblems],
+  );
+  const unsolvedCount = totalCount - solvedCount;
+
   return (
     <section className="page problems-page">
       <div className="greeting-row">
@@ -1436,9 +1561,9 @@ function ProblemsPage({
           <p className="eyebrow">YOUR LIBRARY</p>
           <h1>My problems</h1>
           <p className="muted">
-            Browse all {totalCount} curated problems. Filter by topic or
-            difficulty, add notes and Python solutions, and manage your solve
-            queue.
+            Browse all {totalCount} curated problems. Filter by topic,
+            difficulty, or solved status. Click any problem to open it directly
+            on LeetCode, or expand notes to review Python solutions.
           </p>
         </div>
         <button className="primary" onClick={() => setModalOpen(true)}>
@@ -1456,7 +1581,9 @@ function ProblemsPage({
               key={item.diff}
               className={`diff-stat-card ${item.diff.toLowerCase()}-card ${isSelected ? "selected" : ""}`}
               onClick={() =>
-                setDifficultyFilter((curr) => (curr === item.diff ? "All" : item.diff))
+                setDifficultyFilter((curr) =>
+                  curr === item.diff ? "All" : item.diff,
+                )
               }
               title={`Click to filter by ${item.diff} problems`}
             >
@@ -1479,6 +1606,29 @@ function ProblemsPage({
       </div>
 
       <div className="filter-row">
+        {/* Status Filter Tabs (All / Solved / Unsolved) */}
+        <div className="status-filter-bar">
+          <button
+            className={`status-tab-btn ${statusFilter === "All" ? "selected" : ""}`}
+            onClick={() => setStatusFilter("All")}
+          >
+            All problems <small>({totalCount})</small>
+          </button>
+          <button
+            className={`status-tab-btn ${statusFilter === "Solved" ? "selected" : ""}`}
+            onClick={() => setStatusFilter("Solved")}
+          >
+            <CheckCircle2 size={13} style={{ color: "#2e8b63" }} /> Solved{" "}
+            <small>({solvedCount})</small>
+          </button>
+          <button
+            className={`status-tab-btn ${statusFilter === "Unsolved" ? "selected" : ""}`}
+            onClick={() => setStatusFilter("Unsolved")}
+          >
+            <Circle size={13} /> Unsolved <small>({unsolvedCount})</small>
+          </button>
+        </div>
+
         {/* Difficulty Filter Pills */}
         <div className="difficulty-filter-bar">
           <span className="difficulty-filter-label">Difficulty:</span>
@@ -1486,7 +1636,8 @@ function ProblemsPage({
             const count =
               diff === "All"
                 ? (allProblems || []).length
-                : (allProblems || []).filter((p) => p.difficulty === diff).length;
+                : (allProblems || []).filter((p) => p.difficulty === diff)
+                    .length;
             const isSelected = difficultyFilter === diff;
             return (
               <button
@@ -1494,7 +1645,8 @@ function ProblemsPage({
                 className={`difficulty-pill ${diff.toLowerCase()}-pill ${isSelected ? "selected" : ""}`}
                 onClick={() => setDifficultyFilter(diff)}
               >
-                {diff === "All" ? "All difficulties" : diff} <small>({count})</small>
+                {diff === "All" ? "All difficulties" : diff}{" "}
+                <small>({count})</small>
               </button>
             );
           })}
@@ -1514,9 +1666,13 @@ function ProblemsPage({
         </div>
       </div>
 
-      {(query || filter !== "All topics" || difficultyFilter !== "All") && (
+      {(query ||
+        filter !== "All topics" ||
+        difficultyFilter !== "All" ||
+        statusFilter !== "All") && (
         <p className="muted" style={{ margin: "0 0 16px" }}>
           Showing {problems.length} problem{problems.length === 1 ? "" : "s"}
+          {statusFilter !== "All" ? ` (${statusFilter})` : ""}
           {filter !== "All topics" ? ` in ${filter}` : ""}
           {difficultyFilter !== "All" ? ` • ${difficultyFilter}` : ""}
           {query ? ` matching “${query}”` : ""}
@@ -1532,6 +1688,8 @@ function ProblemsPage({
           <span style={{ textAlign: "right" }}>ACTIONS</span>
         </div>
         {problems.map((problem) => {
+          const isSolved = Boolean(problem.solvedAt);
+          const isExpanded = expandedNotesId === problem.id;
           const isPlanned = Boolean(
             problem.plannedDate && problem.plannedDate <= today,
           );
@@ -1544,114 +1702,302 @@ function ProblemsPage({
           );
 
           return (
-            <div className="table-row" key={problem.id}>
-              <div>
-                <strong>{problem.title}</strong>
-                {problem.url && (
-                  <a href={problem.url} target="_blank" rel="noreferrer">
-                    <ArrowUpRight size={14} />
-                  </a>
-                )}
-                <span className="problem-tags">
-                  {problem.timeComplexity && (
-                    <span className="complexity-tag" title="Time Complexity">
-                      {problem.timeComplexity}
+            <div className="table-row-wrapper" key={problem.id}>
+              <div className={`table-row ${isSolved ? "is-solved" : ""}`}>
+                <div className="problem-cell">
+                  <button
+                    className={`solved-check-btn ${isSolved ? "checked" : ""}`}
+                    onClick={() =>
+                      isSolved ? resetProblem(problem) : markSolved(problem)
+                    }
+                    title={
+                      isSolved
+                        ? "Mark as unsolved"
+                        : "Mark as solved today"
+                    }
+                    aria-label={
+                      isSolved ? "Mark as unsolved" : "Mark as solved"
+                    }
+                  >
+                    {isSolved ? (
+                      <CheckCircle2 size={18} />
+                    ) : (
+                      <Circle size={18} />
+                    )}
+                  </button>
+                  <div>
+                    <a
+                      href={problem.url || getLeetCodeUrl(problem.title)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="problem-title-link"
+                      title={`Open "${problem.title}" directly on LeetCode`}
+                    >
+                      {problem.title}
+                      <ArrowUpRight size={13} />
+                    </a>
+                    <span className="problem-tags">
+                      {problem.timeComplexity && (
+                        <span
+                          className="complexity-tag"
+                          title="Time Complexity"
+                        >
+                          {problem.timeComplexity}
+                        </span>
+                      )}
+                      {problem.pythonCode && (
+                        <span
+                          className="code-tag"
+                          title="Python Solution Added"
+                        >
+                          <Code2 size={11} /> Py
+                        </span>
+                      )}
                     </span>
-                  )}
-                  {problem.pythonCode && (
-                    <span className="code-tag" title="Python Solution Added">
-                      <Code2 size={11} /> Py
-                    </span>
+                  </div>
+                </div>
+
+                <span>{problem.category}</span>
+                <span
+                  className={`status ${isSolved ? "solved-badge" : problem.status}`}
+                >
+                  {isSolved ? (
+                    <>
+                      <Check size={11} /> Solved
+                    </>
+                  ) : wasReviewedToday ? (
+                    "reviewed today"
+                  ) : isPlanned ? (
+                    "planned today"
+                  ) : (
+                    problem.status
                   )}
                 </span>
-              </div>
-              <span>{problem.category}</span>
-              <span className={`status ${problem.status}`}>
-                {wasReviewedToday
-                  ? "reviewed today"
-                  : isPlanned
-                    ? "planned today"
-                    : problem.status}
-              </span>
-              <span>
-                {wasReviewedToday
-                  ? `Next: ${formatDate(problem.nextReview)}`
-                  : isDue
-                    ? "Due today"
-                    : problem.nextReview
-                      ? formatDate(problem.nextReview)
-                      : "—"}
-              </span>
+                <span>
+                  {wasReviewedToday
+                    ? `Next: ${formatDate(problem.nextReview)}`
+                    : isDue
+                      ? "Due today"
+                      : problem.nextReview
+                        ? formatDate(problem.nextReview)
+                        : "—"}
+                </span>
 
-              <div className="table-actions">
-                <button
-                  className={`notes-btn ${hasNotes ? "has-notes" : ""}`}
-                  onClick={() => onOpenNotes(problem)}
-                  title="View / Edit Python code & notes"
-                >
-                  <FileCode2 size={13} />
-                  {hasNotes ? "Notes ✓" : "Notes"}
-                </button>
-
-                {problem.status === "new" ? (
-                  <>
-                    <button
-                      className={isPlanned ? "planned-action" : ""}
-                      onClick={() => planProblem(problem)}
-                    >
-                      {isPlanned ? "In solve list" : "Add to solve list"}
-                    </button>
-                    <button
-                      className="primary-action"
-                      onClick={() => markSolved(problem)}
-                    >
-                      <Check size={14} /> Solved
-                    </button>
-                  </>
-                ) : wasReviewedToday ? (
+                <div className="table-actions">
                   <button
-                    className="undo-button"
-                    onClick={() => undoReview(problem)}
+                    className={`notes-btn ${hasNotes ? "has-notes" : ""} ${isExpanded ? "active" : ""}`}
+                    onClick={() =>
+                      setExpandedNotesId(isExpanded ? null : problem.id)
+                    }
+                    title={
+                      isExpanded
+                        ? "Collapse notes drawer"
+                        : hasNotes
+                          ? "View notes & Python code"
+                          : "Add notes & code"
+                    }
                   >
-                    <Undo2 size={13} /> Undo review
+                    <FileCode2 size={13} />
+                    {hasNotes ? "Notes ✓" : "Notes"}
+                    <ChevronDown
+                      size={12}
+                      style={{
+                        transform: isExpanded ? "rotate(180deg)" : "none",
+                        transition: "transform 0.15s",
+                      }}
+                    />
                   </button>
-                ) : isDue ? (
-                  <>
+
+                  {problem.status === "new" ? (
+                    <>
+                      <button
+                        className={isPlanned ? "planned-action" : ""}
+                        onClick={() => planProblem(problem)}
+                      >
+                        {isPlanned ? "In solve list" : "Add to solve list"}
+                      </button>
+                      <button
+                        className="primary-action"
+                        onClick={() => markSolved(problem)}
+                      >
+                        <Check size={14} /> Solved
+                      </button>
+                    </>
+                  ) : wasReviewedToday ? (
                     <button
-                      className="again-action"
-                      onClick={() => review(problem, "again")}
-                      title="Review again tomorrow"
+                      className="undo-button"
+                      onClick={() => undoReview(problem)}
                     >
-                      Again 1d
+                      <Undo2 size={13} /> Undo review
                     </button>
-                    <button
-                      className="remember-action"
-                      onClick={() => review(problem, "good")}
-                      title="Mark remembered"
-                    >
-                      <Check size={14} /> Remembered
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button onClick={() => review(problem, "good")}>
-                      Review now
-                    </button>
-                    <button
-                      className="reset-button"
-                      title="Reset progress to new"
-                      onClick={() => resetProblem(problem)}
-                    >
-                      <RotateCcw size={13} /> Reset
-                    </button>
-                  </>
-                )}
+                  ) : isDue ? (
+                    <>
+                      <button
+                        className="again-action"
+                        onClick={() => review(problem, "again")}
+                        title="Review again tomorrow"
+                      >
+                        Again 1d
+                      </button>
+                      <button
+                        className="remember-action"
+                        onClick={() => review(problem, "good")}
+                        title="Mark remembered"
+                      >
+                        <Check size={14} /> Remembered
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => review(problem, "good")}>
+                        Review now
+                      </button>
+                      <button
+                        className="reset-button"
+                        title="Reset progress to new"
+                        onClick={() => resetProblem(problem)}
+                      >
+                        <RotateCcw size={13} /> Reset
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
+
+              {isExpanded && (
+                <ProblemNotesDrawer
+                  problem={problem}
+                  onEdit={() => onOpenNotes(problem)}
+                  onClose={() => setExpandedNotesId(null)}
+                />
+              )}
             </div>
           );
         })}
       </div>
     </section>
+  );
+}
+
+function ProblemNotesDrawer({ problem, onEdit, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const hasCode = Boolean(problem.pythonCode && problem.pythonCode.trim());
+  const hasComplexity = Boolean(
+    problem.timeComplexity || problem.spaceComplexity,
+  );
+  const hasNotes = Boolean(problem.notes && problem.notes.trim());
+
+  function copyCode() {
+    if (problem.pythonCode) {
+      navigator.clipboard.writeText(problem.pythonCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  if (!hasCode && !hasComplexity && !hasNotes) {
+    return (
+      <div className="notes-drawer">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+            No solution or notes added yet for <strong>{problem.title}</strong>.
+          </p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="primary"
+              onClick={onEdit}
+              style={{ padding: "6px 12px", fontSize: 11 }}
+            >
+              <Plus size={14} /> Add Python Solution & Notes
+            </button>
+            <button
+              className="undo-button"
+              onClick={onClose}
+              style={{ padding: "6px 10px", fontSize: 11 }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="notes-drawer">
+      <div className="notes-drawer-content">
+        <div className="notes-code-card">
+          <div className="notes-code-header">
+            <span>🐍 Python 3 Solution</span>
+            {hasCode && (
+              <button
+                className="copy-code-btn"
+                onClick={copyCode}
+                title="Copy code to clipboard"
+              >
+                <Copy size={11} /> {copied ? "Copied!" : "Copy code"}
+              </button>
+            )}
+          </div>
+          {hasCode ? (
+            <pre className="notes-code-pre">
+              <code>{problem.pythonCode}</code>
+            </pre>
+          ) : (
+            <p
+              style={{
+                padding: 14,
+                margin: 0,
+                color: "var(--muted)",
+                fontSize: 12,
+              }}
+            >
+              No Python code entered yet. Click "Edit Solution" below to add
+              code.
+            </p>
+          )}
+        </div>
+
+        <div className="notes-meta-card">
+          <div className="notes-complexities">
+            <div className="complexity-box">
+              <span>⏱ Time Complexity</span>
+              <strong>{problem.timeComplexity || "Not specified"}</strong>
+            </div>
+            <div className="complexity-box">
+              <span>💾 Space Complexity</span>
+              <strong>{problem.spaceComplexity || "Not specified"}</strong>
+            </div>
+          </div>
+
+          <div className="notes-approach-view">
+            <span>Key Patterns & Approach Notes</span>
+            <p>{problem.notes || "No approach notes written yet."}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="notes-drawer-actions">
+        <button className="undo-button" onClick={onClose}>
+          Collapse Notes
+        </button>
+        <button
+          className="primary"
+          onClick={onEdit}
+          style={{ padding: "6px 12px", fontSize: 11 }}
+        >
+          <FileCode2 size={13} /> Edit Solution & Notes
+        </button>
+      </div>
+    </div>
   );
 }
 
