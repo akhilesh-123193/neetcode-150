@@ -32,6 +32,18 @@ export default async (request) => {
   if (request.method === "GET" && route === "/state")
     return json(await getData(store));
 
+  if (request.method === "POST" && route === "/state") {
+    const { problems, activity } = await request.json();
+    const current = await getData(store);
+    const nextData = {
+      problems: Array.isArray(problems) ? problems : current.problems,
+      activity:
+        activity && typeof activity === "object" ? activity : current.activity,
+    };
+    await store.setJSON("state", nextData);
+    return json({ success: true, count: nextData.problems.length });
+  }
+
   const data = await getData(store);
   if (request.method === "POST" && route === "/problems") {
     const problem = {

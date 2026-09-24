@@ -2305,13 +2305,49 @@ h1 span {
   color: var(--ink);
   white-space: pre-wrap;
 }
-.dark .notes-approach-view p {
-  color: #dfdfe6;
-}
-.notes-drawer-actions {
+.settings-data-section {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 12px;
+}
+.storage-info-box {
+  background: #f7f6f2;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dark .storage-info-box {
+  background: #23242b;
+  border-color: #363742;
+  color: #a2a3b0;
+}
+.storage-info-box strong {
+  color: var(--ink);
+}
+.dark .storage-info-box strong {
+  color: #fff;
+}
+.backup-buttons-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.backup-buttons-row .outline-button {
+  padding: 7px 12px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 6px;
 }
 
 

@@ -28,6 +28,17 @@ function writeData(data) {
 }
 
 app.get("/api/state", (_, res) => res.json(readData()));
+app.post("/api/state", (req, res) => {
+  const { problems, activity } = req.body;
+  const current = readData();
+  const nextData = {
+    problems: Array.isArray(problems) ? problems : current.problems,
+    activity:
+      activity && typeof activity === "object" ? activity : current.activity,
+  };
+  writeData(nextData);
+  res.json({ success: true, count: nextData.problems.length });
+});
 app.post("/api/problems", (req, res) => {
   const data = readData();
   const problem = {

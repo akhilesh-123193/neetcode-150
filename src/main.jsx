@@ -13,6 +13,8 @@ import {
   CircleHelp,
   Code2,
   Copy,
+  Database,
+  Download,
   ExternalLink,
   FileCode2,
   Flame,
@@ -29,6 +31,7 @@ import {
   Target,
   Trophy,
   Undo2,
+  Upload,
   X,
 } from "lucide-react";
 import {
@@ -691,6 +694,10 @@ function App() {
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
+          problems={problems}
+          activity={activity}
+          setProblems={setProblems}
+          setActivity={setActivity}
           problemsCount={problems.length}
           masteredCount={mastered}
           dark={dark}
@@ -2288,22 +2295,94 @@ function HelpModal({ onClose }) {
 
 function SettingsModal({
   onClose,
+  problems,
+  activity,
+  setProblems,
+  setActivity,
   problemsCount,
   masteredCount,
   dark,
   setDark,
   showToast,
 }) {
+  const fileInputRef = useRef(null);
+
+  function handleExportBackup() {
+    const backupData = {
+      app: "dsa-revision-lab",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      problems,
+      activity,
+    };
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `dsa-revision-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast("Downloaded complete data backup (JSON).");
+  }
+
+  function handleImportBackup(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (!Array.isArray(parsed.problems)) {
+          throw new Error("Invalid backup: missing problems list");
+        }
+        setProblems(parsed.problems);
+        try {
+          localStorage.setItem(
+            "recall-problems-v1",
+            JSON.stringify(parsed.problems),
+          );
+        } catch {}
+        if (parsed.activity && typeof parsed.activity === "object") {
+          setActivity(parsed.activity);
+          try {
+            localStorage.setItem(
+              "recall-activity-v1",
+              JSON.stringify(parsed.activity),
+            );
+          } catch {}
+        }
+        fetch("/api/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            problems: parsed.problems,
+            activity: parsed.activity || {},
+          }),
+        }).catch(() => {});
+        showToast(
+          `Restored ${parsed.problems.length} problems & notes from backup.`,
+        );
+        onClose();
+      } catch (err) {
+        showToast(`Failed to restore backup: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
         className="modal"
         onMouseDown={(event) => event.stopPropagation()}
-        style={{ maxWidth: 500 }}
+        style={{ maxWidth: 520 }}
       >
         <div className="modal-title">
           <div>
-            <p className="eyebrow">PREFERENCES</p>
+            <p className="eyebrow">PREFERENCES & DATA</p>
             <h2>Settings</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose}>
@@ -2337,6 +2416,7 @@ function SettingsModal({
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
           </div>
+
           <div
             style={{
               borderTop: "1px solid var(--line)",
@@ -2349,7 +2429,63 @@ function SettingsModal({
             <br />
             <span>Mastered problems: {masteredCount}</span>
           </div>
+
+          {/* Data Storage & Backup Section */}
+          <div className="settings-data-section">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontWeight: 600,
+                fontSize: 13,
+              }}
+            >
+              <Database size={16} style={{ color: "var(--violet)" }} />
+              <span>Data Storage & Resilience</span>
+            </div>
+
+            <div className="storage-info-box">
+              <span>
+                <strong>Persistent Server Sync:</strong> When running locally or
+                on Netlify, all notes, Python solutions, and progress are saved to
+                <code>server/data.json</code> (or Netlify Blobs).
+              </span>
+              <span>
+                <strong>Clearing Browser Data:</strong> If you clear browser
+                cookies or localStorage, your notes and solved history will{" "}
+                <strong>not disappear</strong> — they are automatically restored
+                from the server upon launch.
+              </span>
+            </div>
+
+            <div className="backup-buttons-row">
+              <button
+                type="button"
+                className="outline-button"
+                onClick={handleExportBackup}
+                title="Download all your problems, notes, code, and activity as a JSON backup"
+              >
+                <Download size={14} /> Export Backup (.json)
+              </button>
+
+              <label
+                className="outline-button"
+                title="Restore from a previously saved JSON backup file"
+              >
+                <Upload size={14} /> Restore Backup
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleImportBackup}
+                  style={{ display: "none" }}
+                />
+              </label>
+            </div>
+          </div>
         </div>
+
         <button
           className="primary submit"
           onClick={onClose}
