@@ -92,3 +92,27 @@ test("caps maximum interval at the last defined repetition interval", () => {
   const maxInterval = intervals[intervals.length - 1];
   assert.equal(getNextReviewDate(today, 10), addDays(today, maxInterval));
 });
+
+test("accurately retrieves solve history and last solved date", async () => {
+  const { getSolveHistory, getLastSolvedDate } = await import(
+    "./neetcode150.js"
+  );
+  assert.deepEqual(getSolveHistory({}), []);
+  assert.equal(getLastSolvedDate({}), null);
+
+  // Backward-compatibility: problem has solvedAt but no solveHistory array
+  const legacyProb = { solvedAt: "2026-09-20" };
+  assert.deepEqual(getSolveHistory(legacyProb), ["2026-09-20"]);
+  assert.equal(getLastSolvedDate(legacyProb), "2026-09-20");
+
+  // Modern problem with multiple solve dates
+  const multiProb = {
+    solveHistory: ["2026-09-15", "2026-09-20", "2026-09-28"],
+  };
+  assert.deepEqual(getSolveHistory(multiProb), [
+    "2026-09-15",
+    "2026-09-20",
+    "2026-09-28",
+  ]);
+  assert.equal(getLastSolvedDate(multiProb), "2026-09-28");
+});

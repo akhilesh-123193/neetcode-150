@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Bell,
   BrainCircuit,
+  Calendar,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   ChevronRight,
   Circle,
   CircleHelp,
+  Clock,
   Code2,
   Copy,
   Database,
@@ -19,6 +21,7 @@ import {
   FileCode2,
   Flame,
   Grid2X2,
+  History,
   Home,
   Layers3,
   Moon,
@@ -29,6 +32,7 @@ import {
   Sparkles,
   Sun,
   Target,
+  Trash2,
   Trophy,
   Undo2,
   Upload,
@@ -43,7 +47,12 @@ import {
   getNextReviewDate,
   intervals,
 } from "../shared/scheduler.js";
-import { getLeetCodeUrl, starterProblems } from "../shared/neetcode150.js";
+import {
+  getLastSolvedDate,
+  getLeetCodeUrl,
+  getSolveHistory,
+  starterProblems,
+} from "../shared/neetcode150.js";
 import "./styles.css";
 
 function loadInitialProblems() {
@@ -106,6 +115,28 @@ const formatDate = (date) => {
   );
 };
 
+const formatFullDate = (date) => {
+  if (!date) return "—";
+  return new Intl.DateTimeFormat("en", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(`${date}T12:00:00`));
+};
+
+const formatRelativeDays = (dateStr, refDateStr) => {
+  if (!dateStr) return "";
+  const d1 = new Date(`${dateStr}T12:00:00`);
+  const d2 = new Date(`${refDateStr}T12:00:00`);
+  const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays > 1) return `${diffDays} days ago`;
+  if (diffDays === -1) return "Tomorrow";
+  return `in ${Math.abs(diffDays)} days`;
+};
+
 function App() {
   const [problems, setProblems] = useState(loadInitialProblems);
   const [activity, setActivity] = useState(loadInitialActivity);
@@ -114,6 +145,7 @@ function App() {
   const [difficultyFilter, setDifficultyFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [activeNotesProblem, setActiveNotesProblem] = useState(null);
+  const [historyModalProblem, setHistoryModalProblem] = useState(null);
   const [expandedNotesId, setExpandedNotesId] = useState(null);
   const [query, setQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -154,6 +186,15 @@ function App() {
                 spaceComplexity:
                   serverProb.spaceComplexity || localProb?.spaceComplexity || "",
                 notes: serverProb.notes || localProb?.notes || "",
+                solveHistory: Array.isArray(serverProb.solveHistory)
+                  ? serverProb.solveHistory
+                  : Array.isArray(localProb?.solveHistory)
+                    ? localProb.solveHistory
+                    : serverProb.solvedAt
+                      ? [serverProb.solvedAt]
+                      : localProb?.solvedAt
+                        ? [localProb.solvedAt]
+                        : [],
               };
             });
             try {
@@ -371,11 +412,15 @@ function App() {
   function markSolved(problem) {
     const previousProblem = { ...problem };
     const nextReview = getNextReviewDate(today, 0); // 1 day out
+    const currentHistory = getSolveHistory(problem);
+    const updatedHistory = [...currentHistory, today];
     const patch = {
       status: "learning",
       repetitions: 0,
       plannedDate: null,
       solvedAt: today,
+      lastSolvedAt: today,
+      solveHistory: updatedHistory,
       nextReview,
     };
     updateProblem(problem, patch);
@@ -474,10 +519,15 @@ function App() {
     if (matchingAction) {
       undoSpecificAction(matchingAction);
     } else {
+      const currentHistory = getSolveHistory(problem);
+      const updatedHistory = currentHistory.slice(0, -1);
+      const lastSolved = updatedHistory[updatedHistory.length - 1] || null;
       const patch = {
-        status: "new",
+        status: lastSolved ? "learning" : "new",
         repetitions: 0,
-        solvedAt: null,
+        solvedAt: lastSolved,
+        lastSolvedAt: lastSolved,
+        solveHistory: updatedHistory,
         nextReview: null,
         plannedDate: today,
       };
@@ -495,6 +545,8 @@ function App() {
       nextReview: null,
       plannedDate: null,
       solvedAt: null,
+      lastSolvedAt: null,
+      solveHistory: [],
       lastReviewed: null,
       lastReviewQuality: null,
     };
@@ -513,6 +565,41 @@ function App() {
       label: "Undo",
       onClick: () => undoSpecificAction(action),
     });
+  }
+
+  function handleAddSolveDate(problem, dateStr) {
+    const targetDate = dateStr || today;
+    const currentHistory = getSolveHistory(problem);
+    const updatedHistory = [...currentHistory, targetDate].sort();
+    const lastSolved = updatedHistory[updatedHistory.length - 1];
+    const patch = {
+      solvedAt: lastSolved,
+      lastSolvedAt: lastSolved,
+      solveHistory: updatedHistory,
+      status: problem.status === "new" ? "learning" : problem.status,
+    };
+    updateProblem(problem, patch);
+    if (historyModalProblem && historyModalProblem.id === problem.id) {
+      setHistoryModalProblem((prev) => ({ ...prev, ...patch }));
+    }
+    showToast(`Added solve date (${formatDate(targetDate)}) for "${problem.title}".`);
+  }
+
+  function handleRemoveSolveDate(problem, indexToRemove) {
+    const currentHistory = getSolveHistory(problem);
+    const updatedHistory = currentHistory.filter((_, idx) => idx !== indexToRemove);
+    const lastSolved = updatedHistory[updatedHistory.length - 1] || null;
+    const patch = {
+      solvedAt: lastSolved,
+      lastSolvedAt: lastSolved,
+      solveHistory: updatedHistory,
+      status: updatedHistory.length === 0 ? "new" : problem.status,
+    };
+    updateProblem(problem, patch);
+    if (historyModalProblem && historyModalProblem.id === problem.id) {
+      setHistoryModalProblem((prev) => ({ ...prev, ...patch }));
+    }
+    showToast(`Removed solve date entry for "${problem.title}".`);
   }
 
   async function addProblem(form) {
@@ -560,6 +647,7 @@ function App() {
         setModalOpen={setModalOpen}
         setActivePage={setActivePage}
         activity={activity}
+        onOpenHistory={(prob) => setHistoryModalProblem(prob)}
       />
     ) : activePage === "Review calendar" ? (
       <ReviewCalendar
@@ -595,6 +683,7 @@ function App() {
         markSolved={markSolved}
         resetProblem={resetProblem}
         today={today}
+        onOpenHistory={(prob) => setHistoryModalProblem(prob)}
       />
     );
 
@@ -672,6 +761,16 @@ function App() {
 
       {modalOpen && (
         <AddProblem onClose={() => setModalOpen(false)} onAdd={addProblem} />
+      )}
+
+      {historyModalProblem && (
+        <SolveHistoryModal
+          problem={historyModalProblem}
+          onClose={() => setHistoryModalProblem(null)}
+          onAddDate={handleAddSolveDate}
+          onRemoveDate={handleRemoveSolveDate}
+          today={today}
+        />
       )}
 
       {activeNotesProblem && (
@@ -806,6 +905,7 @@ function Dashboard({
   setModalOpen,
   setActivePage,
   activity,
+  onOpenHistory,
 }) {
   const totalCount = problems.length;
 
@@ -946,6 +1046,19 @@ function Dashboard({
                           {problem.difficulty}
                         </b>
                       </p>
+                      {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                        <button
+                          type="button"
+                          className="card-solve-meta"
+                          onClick={() => onOpenHistory(problem)}
+                          title="Click to view solve timeline"
+                        >
+                          <History size={12} />
+                          <span>
+                            {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                          </span>
+                        </button>
+                      )}
                     </div>
                     <button
                       className="remove-plan"
@@ -1001,6 +1114,19 @@ function Dashboard({
                           Next recall scheduled:{" "}
                           <b>{formatDate(problem.nextReview)}</b>
                         </p>
+                        {onOpenHistory && (
+                          <button
+                            type="button"
+                            className="card-solve-meta"
+                            onClick={() => onOpenHistory(problem)}
+                            title="Click to view solve timeline"
+                          >
+                            <History size={12} />
+                            <span>
+                              {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                            </span>
+                          </button>
+                        )}
                       </div>
                       <button
                         className="undo-button"
@@ -1055,6 +1181,7 @@ function Dashboard({
                     key={problem.id}
                     problem={problem}
                     review={review}
+                    onOpenHistory={onOpenHistory}
                   />
                 ))
               ) : completedTodayCount >= dailyCap ? null : (
@@ -1099,6 +1226,19 @@ function Dashboard({
                           </span>
                           Next review: <b>{formatDate(problem.nextReview)}</b>
                         </p>
+                        {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                          <button
+                            type="button"
+                            className="card-solve-meta"
+                            onClick={() => onOpenHistory(problem)}
+                            title="Click to view solve timeline"
+                          >
+                            <History size={12} />
+                            <span>
+                              {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                            </span>
+                          </button>
+                        )}
                       </div>
                       <button
                         className="undo-button"
@@ -1176,9 +1316,12 @@ function StatCards({ mastered, streak, totalCount }) {
   );
 }
 
-function ProblemCard({ problem, review }) {
+function ProblemCard({ problem, review, onOpenHistory }) {
   const nextRememberInterval =
     intervals[Math.min((problem.repetitions ?? 0) + 1, intervals.length - 1)];
+  const history = getSolveHistory(problem);
+  const solveCount = history.length;
+  const lastDate = getLastSolvedDate(problem);
 
   return (
     <article className="problem-card" id={`review-${problem.id}`}>
@@ -1204,6 +1347,19 @@ function ProblemCard({ problem, review }) {
             {problem.difficulty}
           </b>
         </p>
+        {solveCount > 0 && onOpenHistory && (
+          <button
+            type="button"
+            className="card-solve-meta"
+            onClick={() => onOpenHistory(problem)}
+            title="Click to view solve timeline"
+          >
+            <History size={12} />
+            <span>
+              {solveCount}× (Last: {formatDate(lastDate)})
+            </span>
+          </button>
+        )}
       </div>
       <div className="review-actions">
         <span className="due-now">Due today</span>
@@ -1542,6 +1698,7 @@ function ProblemsPage({
   markSolved,
   resetProblem,
   today,
+  onOpenHistory,
 }) {
   const diffStats = useMemo(() => {
     const list = ["Easy", "Medium", "Hard"];
@@ -1691,11 +1848,15 @@ function ProblemsPage({
           <span>PROBLEM</span>
           <span>TOPIC</span>
           <span>STATUS</span>
+          <span>SOLVED</span>
           <span>NEXT REVIEW</span>
           <span style={{ textAlign: "right" }}>ACTIONS</span>
         </div>
         {problems.map((problem) => {
           const isSolved = Boolean(problem.solvedAt);
+          const history = getSolveHistory(problem);
+          const solveCount = history.length;
+          const lastDate = getLastSolvedDate(problem);
           const isExpanded = expandedNotesId === problem.id;
           const isPlanned = Boolean(
             problem.plannedDate && problem.plannedDate <= today,
@@ -1744,6 +1905,20 @@ function ProblemsPage({
                       <ArrowUpRight size={13} />
                     </a>
                     <span className="problem-tags">
+                      {solveCount > 0 && (
+                        <button
+                          type="button"
+                          className="problem-solve-tag"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenHistory?.(problem);
+                          }}
+                          title="Click to view solve timeline"
+                        >
+                          <History size={10} />
+                          {solveCount}× (Last: {formatDate(lastDate)})
+                        </button>
+                      )}
                       {problem.timeComplexity && (
                         <span
                           className="complexity-tag"
@@ -1780,6 +1955,31 @@ function ProblemsPage({
                     problem.status
                   )}
                 </span>
+                <div className="solves-cell">
+                  {solveCount > 0 ? (
+                    <button
+                      type="button"
+                      className="solves-chip active"
+                      onClick={() => onOpenHistory?.(problem)}
+                      title="Click to view all solve dates"
+                    >
+                      <History size={12} />
+                      <strong>{solveCount}×</strong>
+                      <span className="solves-last-date">
+                        Last: {formatDate(lastDate)}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="solves-chip zero"
+                      onClick={() => onOpenHistory?.(problem)}
+                      title="Click to view or record solves"
+                    >
+                      0 solves
+                    </button>
+                  )}
+                </div>
                 <span>
                   {wasReviewedToday
                     ? `Next: ${formatDate(problem.nextReview)}`
@@ -1876,6 +2076,8 @@ function ProblemsPage({
                   problem={problem}
                   onEdit={() => onOpenNotes(problem)}
                   onClose={() => setExpandedNotesId(null)}
+                  onOpenHistory={onOpenHistory}
+                  today={today}
                 />
               )}
             </div>
@@ -1886,13 +2088,22 @@ function ProblemsPage({
   );
 }
 
-function ProblemNotesDrawer({ problem, onEdit, onClose }) {
+function ProblemNotesDrawer({
+  problem,
+  onEdit,
+  onClose,
+  onOpenHistory,
+  today,
+}) {
   const [copied, setCopied] = useState(false);
   const hasCode = Boolean(problem.pythonCode && problem.pythonCode.trim());
   const hasComplexity = Boolean(
     problem.timeComplexity || problem.spaceComplexity,
   );
   const hasNotes = Boolean(problem.notes && problem.notes.trim());
+  const history = getSolveHistory(problem);
+  const hasHistory = history.length > 0;
+  const lastDate = getLastSolvedDate(problem);
 
   function copyCode() {
     if (problem.pythonCode) {
@@ -1902,7 +2113,7 @@ function ProblemNotesDrawer({ problem, onEdit, onClose }) {
     }
   }
 
-  if (!hasCode && !hasComplexity && !hasNotes) {
+  if (!hasCode && !hasComplexity && !hasNotes && !hasHistory) {
     return (
       <div className="notes-drawer">
         <div
@@ -1989,6 +2200,57 @@ function ProblemNotesDrawer({ problem, onEdit, onClose }) {
             <span>Key Patterns & Approach Notes</span>
             <p>{problem.notes || "No approach notes written yet."}</p>
           </div>
+
+          <div className="notes-solve-history-card">
+            <div className="notes-solve-header">
+              <strong>
+                <History
+                  size={13}
+                  style={{ verticalAlign: "middle", marginRight: 5 }}
+                />
+                Solve Frequency & History
+              </strong>
+              {onOpenHistory && (
+                <button
+                  type="button"
+                  className="text-button"
+                  style={{ fontSize: 11, padding: "2px 6px" }}
+                  onClick={() => onOpenHistory(problem)}
+                >
+                  View all dates →
+                </button>
+              )}
+            </div>
+            <div className="notes-solve-summary">
+              <div>
+                <span className="summary-label">TOTAL SOLVES</span>
+                <span className="summary-value">
+                  {history.length} time{history.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div>
+                <span className="summary-label">LAST SOLVED</span>
+                <span className="summary-value">
+                  {lastDate
+                    ? `${formatDate(lastDate)} (${formatRelativeDays(lastDate, today)})`
+                    : "Never"}
+                </span>
+              </div>
+            </div>
+            {hasHistory && (
+              <div className="dates-pill-list">
+                {history
+                  .slice(-5)
+                  .reverse()
+                  .map((date, i) => (
+                    <span key={i} className="date-pill">
+                      <Calendar size={10} />
+                      {formatDate(date)}
+                    </span>
+                  ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2003,6 +2265,169 @@ function ProblemNotesDrawer({ problem, onEdit, onClose }) {
         >
           <FileCode2 size={13} /> Edit Solution & Notes
         </button>
+      </div>
+    </div>
+  );
+}
+
+function SolveHistoryModal({
+  problem,
+  onClose,
+  onAddDate,
+  onRemoveDate,
+  today,
+}) {
+  const history = getSolveHistory(problem);
+  const totalSolves = history.length;
+  const lastDate = getLastSolvedDate(problem);
+  const firstDate = history.length > 0 ? history[0] : null;
+
+  // Render list sorted newest to oldest
+  const reversedHistory = useMemo(() => {
+    return history
+      .map((date, originalIndex) => ({ date, originalIndex }))
+      .reverse();
+  }, [history]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal solve-history-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 540 }}
+      >
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">SOLVE TIMELINE & LOG</p>
+            <h2>{problem.title}</h2>
+          </div>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            aria-label="Close modal"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="solve-history-meta-bar">
+          <span className={`difficulty ${problem.difficulty.toLowerCase()}`}>
+            {problem.difficulty}
+          </span>
+          <span className="cat-pill">{problem.category}</span>
+          <a
+            href={problem.url || getLeetCodeUrl(problem.title)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="leetcode-link-btn"
+          >
+            LeetCode <ExternalLink size={12} />
+          </a>
+        </div>
+
+        <div className="history-stat-grid">
+          <div className="stat-card">
+            <span className="stat-label">Total Solves</span>
+            <span className="stat-value">{totalSolves}</span>
+            <small>
+              {totalSolves === 1 ? "1 time" : `${totalSolves} times`}
+            </small>
+          </div>
+          <div className="stat-card">
+            <span className="stat-label">Last Solved</span>
+            <span className="stat-value" style={{ fontSize: 15 }}>
+              {lastDate ? formatDate(lastDate) : "—"}
+            </span>
+            <small>
+              {lastDate ? formatRelativeDays(lastDate, today) : "Not solved yet"}
+            </small>
+          </div>
+          <div className="stat-card">
+            <span className="stat-label">First Solved</span>
+            <span className="stat-value" style={{ fontSize: 15 }}>
+              {firstDate ? formatDate(firstDate) : "—"}
+            </span>
+            <small>
+              {firstDate ? formatRelativeDays(firstDate, today) : "—"}
+            </small>
+          </div>
+        </div>
+
+        <div className="history-timeline-section">
+          <div className="timeline-header">
+            <h3>
+              <Clock size={15} /> All Solve Dates ({totalSolves})
+            </h3>
+            <button
+              type="button"
+              className="text-button"
+              style={{ fontSize: 12 }}
+              onClick={() => onAddDate(problem, today)}
+            >
+              <Plus size={13} /> Record solve today
+            </button>
+          </div>
+
+          {reversedHistory.length > 0 ? (
+            <div className="timeline-list">
+              {reversedHistory.map(({ date, originalIndex }, idx) => {
+                const isLatest = idx === 0;
+                return (
+                  <div
+                    key={`${date}-${originalIndex}`}
+                    className={`timeline-entry ${isLatest ? "latest" : ""}`}
+                  >
+                    <span className="timeline-badge">
+                      {isLatest ? "Latest" : `#${originalIndex + 1}`}
+                    </span>
+                    <div className="timeline-content">
+                      <div className="timeline-date">
+                        <Calendar
+                          size={13}
+                          style={{ color: "var(--muted)" }}
+                        />
+                        <strong>{formatFullDate(date)}</strong>
+                      </div>
+                      <span className="timeline-relative">
+                        {formatRelativeDays(date, today)}
+                      </span>
+                    </div>
+                    {onRemoveDate && (
+                      <button
+                        type="button"
+                        className="delete-entry-btn"
+                        onClick={() => onRemoveDate(problem, originalIndex)}
+                        title="Remove this solve date entry"
+                        aria-label="Remove date"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="history-empty-state">
+              <CalendarDays size={32} opacity={0.4} />
+              <p>You haven’t recorded any solves for this problem yet.</p>
+              <button
+                type="button"
+                className="primary"
+                style={{ fontSize: 12, padding: "6px 14px" }}
+                onClick={() => onAddDate(problem, today)}
+              >
+                <Check size={14} /> Mark solved today
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="modal-actions" style={{ marginTop: 20 }}>
+          <button className="primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
       </div>
     </div>
   );
