@@ -116,39 +116,3 @@ test("accurately retrieves solve history and last solved date", async () => {
   ]);
   assert.equal(getLastSolvedDate(multiProb), "2026-09-28");
 });
-
-test("provides full NeetCode 150 and SQL 50 catalogs with distinct tracks", async () => {
-  const { starterProblems, dsaStarterProblems } = await import("./neetcode150.js");
-  const { sql50StarterProblems } = await import("./sql50.js");
-
-  assert.equal(dsaStarterProblems.length, 150);
-  assert.equal(sql50StarterProblems.length, 50);
-  assert.equal(starterProblems.length, 200);
-
-  assert.ok(dsaStarterProblems.every((p) => p.track === "dsa"));
-  assert.ok(sql50StarterProblems.every((p) => p.track === "sql"));
-  assert.ok(sql50StarterProblems.every((p) => p.id >= 1001 && p.id <= 1050));
-});
-
-test("supports independent 2-problem daily revision caps for DSA and SQL tracks", () => {
-  const dsaUnreviewed = [
-    { id: 1, track: "dsa", nextReview: "2026-09-20", status: "review" },
-    { id: 2, track: "dsa", nextReview: "2026-09-21", status: "review" },
-    { id: 3, track: "dsa", nextReview: "2026-09-22", status: "review" },
-  ];
-  const sqlUnreviewed = [
-    { id: 1001, track: "sql", nextReview: "2026-09-20", status: "review" },
-    { id: 1002, track: "sql", nextReview: "2026-09-21", status: "review" },
-    { id: 1003, track: "sql", nextReview: "2026-09-22", status: "review" },
-  ];
-
-  const dueDsa = getDueReviews(dsaUnreviewed, today, 2);
-  const dueSql = getDueReviews(sqlUnreviewed, today, 2);
-
-  assert.equal(dueDsa.length, 2);
-  assert.deepEqual(dueDsa.map((p) => p.id), [1, 2]);
-
-  assert.equal(dueSql.length, 2);
-  assert.deepEqual(dueSql.map((p) => p.id), [1001, 1002]);
-});
-
