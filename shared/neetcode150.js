@@ -43,12 +43,17 @@ export function getLeetCodeUrl(title) {
   return `https://leetcode.com/problems/${slug}/`;
 }
 
-export const starterProblems = catalog
+import { sql50StarterProblems } from "./sql50.js";
+
+export const dsaCatalog = catalog;
+
+export const dsaStarterProblems = catalog
   .flatMap(([category, problems]) =>
     problems.map(([title, difficulty]) => ({ title, category, difficulty })),
   )
   .map((problem, index) => ({
     id: index + 1,
+    track: "dsa",
     ...problem,
     url: getLeetCodeUrl(problem.title),
     status: "new",
@@ -62,6 +67,8 @@ export const starterProblems = catalog
     notes: "",
     solveHistory: [],
   }));
+
+export const starterProblems = [...dsaStarterProblems, ...sql50StarterProblems];
 
 export function getSolveHistory(problem) {
   if (!problem) return [];
