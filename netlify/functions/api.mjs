@@ -1,17 +1,52 @@
 import { getStore } from "@netlify/blobs";
 import { starterProblems } from "../../shared/neetcode150.js";
 
+let memoryFallback = {
+  problems: starterProblems,
+  activity: {},
+};
+
+function getSafeStore() {
+  try {
+    return getStore("recall-data", { consistency: "strong" });
+  } catch (err) {
+    console.warn("Could not initialize @netlify/blobs:", err?.message || err);
+    return null;
+  }
+}
+
 async function getData(store) {
-  const data = await store.get("state", { type: "json" });
-  if (!data) return { problems: starterProblems, activity: {} };
-  const knownTitles = new Set(data.problems.map((problem) => problem.title));
-  return {
-    problems: [
-      ...data.problems,
-      ...starterProblems.filter((problem) => !knownTitles.has(problem.title)),
-    ],
-    activity: data.activity ?? {},
-  };
+  if (!store) return memoryFallback;
+  try {
+    const data = await store.get("state", { type: "json" });
+    if (!data || !Array.isArray(data.problems)) {
+      return { problems: starterProblems, activity: {} };
+    }
+    const knownTitles = new Set(data.problems.map((problem) => problem.title));
+    return {
+      problems: [
+        ...data.problems.map((p) => ({
+          ...p,
+          track: p.track || (p.id > 1000 ? "sql" : "dsa"),
+        })),
+        ...starterProblems.filter((problem) => !knownTitles.has(problem.title)),
+      ],
+      activity: data.activity ?? {},
+    };
+  } catch (err) {
+    console.warn("Netlify blobs get failed, using fallback:", err?.message || err);
+    return memoryFallback;
+  }
+}
+
+async function saveData(store, nextData) {
+  memoryFallback = nextData;
+  if (!store) return;
+  try {
+    await store.setJSON("state", nextData);
+  } catch (err) {
+    console.warn("Netlify blobs setJSON failed:", err?.message || err);
+  }
 }
 
 function json(body, status = 200) {
@@ -27,58 +62,76 @@ export default async (request) => {
     url.pathname
       .replace(/^\/.netlify\/functions\/api/, "")
       .replace(/^\/api/, "") || "/";
-  const store = getStore("recall-data", { consistency: "strong" });
+  const store = getSafeStore();
 
-  if (request.method === "GET" && route === "/state")
+  if (request.method === "GET" && route === "/state") {
     return json(await getData(store));
+  }
 
   if (request.method === "POST" && route === "/state") {
-    const { problems, activity } = await request.json();
-    const current = await getData(store);
-    const nextData = {
-      problems: Array.isArray(problems) ? problems : current.problems,
-      activity:
-        activity && typeof activity === "object" ? activity : current.activity,
-    };
-    await store.setJSON("state", nextData);
-    return json({ success: true, count: nextData.problems.length });
+    try {
+      const { problems, activity } = await request.json();
+      const current = await getData(store);
+      const nextData = {
+        problems: Array.isArray(problems) ? problems : current.problems,
+        activity:
+          activity && typeof activity === "object" ? activity : current.activity,
+      };
+      await saveData(store, nextData);
+      return json({ success: true, count: nextData.problems.length });
+    } catch (err) {
+      return json({ error: err?.message || "Invalid payload" }, 400);
+    }
   }
 
   const data = await getData(store);
   if (request.method === "POST" && route === "/problems") {
-    const problem = {
-      id: Date.now(),
-      status: "new",
-      repetitions: 0,
-      nextReview: null,
-      plannedDate: null,
-      ...(await request.json()),
-    };
-    data.problems.push(problem);
-    await store.setJSON("state", data);
-    return json(problem, 201);
+    try {
+      const body = await request.json();
+      const problem = {
+        id: Date.now(),
+        status: "new",
+        repetitions: 0,
+        nextReview: null,
+        plannedDate: null,
+        ...body,
+      };
+      data.problems.push(problem);
+      await saveData(store, data);
+      return json(problem, 201);
+    } catch (err) {
+      return json({ error: err?.message || "Invalid payload" }, 400);
+    }
   }
 
   if (request.method === "POST" && route === "/activity") {
-    const { date, delta = 1 } = await request.json();
-    if (!date) return json({ error: "Date is required" }, 400);
-    const newCount = Math.max(0, (data.activity[date] ?? 0) + delta);
-    if (newCount === 0) {
-      delete data.activity[date];
-    } else {
-      data.activity[date] = newCount;
+    try {
+      const { date, delta = 1 } = await request.json();
+      if (!date) return json({ error: "Date is required" }, 400);
+      const newCount = Math.max(0, (data.activity[date] ?? 0) + delta);
+      if (newCount === 0) {
+        delete data.activity[date];
+      } else {
+        data.activity[date] = newCount;
+      }
+      await saveData(store, data);
+      return json({ date, count: data.activity[date] ?? 0 });
+    } catch (err) {
+      return json({ error: err?.message || "Invalid payload" }, 400);
     }
-    await store.setJSON("state", data);
-    return json({ date, count: data.activity[date] ?? 0 });
   }
 
   const match = route.match(/^\/problems\/(\d+)$/);
   if (request.method === "PATCH" && match) {
-    const problem = data.problems.find((item) => item.id === Number(match[1]));
-    if (!problem) return json({ error: "Problem not found" }, 404);
-    Object.assign(problem, await request.json());
-    await store.setJSON("state", data);
-    return json(problem);
+    try {
+      const problem = data.problems.find((item) => item.id === Number(match[1]));
+      if (!problem) return json({ error: "Problem not found" }, 404);
+      Object.assign(problem, await request.json());
+      await saveData(store, data);
+      return json(problem);
+    } catch (err) {
+      return json({ error: err?.message || "Invalid payload" }, 400);
+    }
   }
 
   if (request.method === "DELETE" && match) {
@@ -86,7 +139,7 @@ export default async (request) => {
     const index = data.problems.findIndex((item) => item.id === id);
     if (index === -1) return json({ error: "Problem not found" }, 404);
     data.problems.splice(index, 1);
-    await store.setJSON("state", data);
+    await saveData(store, data);
     return json({ success: true, id });
   }
 

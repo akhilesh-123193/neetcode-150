@@ -19,6 +19,7 @@ import {
   Download,
   ExternalLink,
   FileCode2,
+  Filter,
   Flame,
   Grid2X2,
   History,
@@ -48,19 +49,36 @@ import {
   intervals,
 } from "../shared/scheduler.js";
 import {
+  dsaCatalog,
+  dsaStarterProblems,
   getLastSolvedDate,
   getLeetCodeUrl,
   getSolveHistory,
   starterProblems,
 } from "../shared/neetcode150.js";
+import {
+  getSqlLeetCodeUrl,
+  sql50Catalog,
+  sql50StarterProblems,
+  sqlTopics,
+} from "../shared/sql50.js";
+import {
+  mergeProblems,
+  mergeActivity,
+  isServerMissingProgress,
+} from "../shared/dataMerge.js";
 import "./styles.css";
 
 function loadInitialProblems() {
   try {
     const saved = localStorage.getItem("recall-problems-v1");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    const backup = localStorage.getItem("recall-problems-backup-v1");
+    const toParse = saved || backup;
+    if (toParse) {
+      const parsed = JSON.parse(toParse);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return mergeProblems([], parsed, starterProblems);
+      }
     }
   } catch {}
   return starterProblems;
@@ -76,7 +94,7 @@ function loadInitialActivity() {
   return {};
 }
 
-const topics = [
+const dsaTopics = [
   "All topics",
   "Arrays & Hashing",
   "Two Pointers",
@@ -141,9 +159,12 @@ function App() {
   const [problems, setProblems] = useState(loadInitialProblems);
   const [activity, setActivity] = useState(loadInitialActivity);
   const [activePage, setActivePage] = useState("Dashboard");
-  const [filter, setFilter] = useState("All topics");
+  const [dsaTopicFilter, setDsaTopicFilter] = useState("All topics");
+  const [sqlTopicFilter, setSqlTopicFilter] = useState("All topics");
   const [difficultyFilter, setDifficultyFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [dashboardTrack, setDashboardTrack] = useState("all");
+  const [calendarTrack, setCalendarTrack] = useState("all");
   const [activeNotesProblem, setActiveNotesProblem] = useState(null);
   const [historyModalProblem, setHistoryModalProblem] = useState(null);
   const [expandedNotesId, setExpandedNotesId] = useState(null);
@@ -165,6 +186,7 @@ function App() {
     toastTimer.current = setTimeout(() => setToast(null), duration);
   }
 
+  // Resilient, non-destructive initial state sync
   useEffect(() => {
     fetch("/api/state")
       .then((response) => {
@@ -173,48 +195,43 @@ function App() {
       })
       .then((data) => {
         if (Array.isArray(data.problems) && data.problems.length > 0) {
-          setProblems((localItems) => {
-            const localMap = new Map(localItems.map((p) => [p.id, p]));
-            const merged = data.problems.map((serverProb) => {
-              const localProb = localMap.get(serverProb.id);
-              return {
-                ...serverProb,
-                url: serverProb.url || getLeetCodeUrl(serverProb.title),
-                pythonCode: serverProb.pythonCode || localProb?.pythonCode || "",
-                timeComplexity:
-                  serverProb.timeComplexity || localProb?.timeComplexity || "",
-                spaceComplexity:
-                  serverProb.spaceComplexity || localProb?.spaceComplexity || "",
-                notes: serverProb.notes || localProb?.notes || "",
-                solveHistory: Array.isArray(serverProb.solveHistory)
-                  ? serverProb.solveHistory
-                  : Array.isArray(localProb?.solveHistory)
-                    ? localProb.solveHistory
-                    : serverProb.solvedAt
-                      ? [serverProb.solvedAt]
-                      : localProb?.solvedAt
-                        ? [localProb.solvedAt]
-                        : [],
-              };
-            });
+          setProblems((currentLocalItems) => {
+            // Merge without ever wiping local solved progress with untouched server problems
+            const merged = mergeProblems(data.problems, currentLocalItems, starterProblems);
             try {
               localStorage.setItem("recall-problems-v1", JSON.stringify(merged));
+              localStorage.setItem("recall-problems-backup-v1", JSON.stringify(merged));
             } catch {}
+
+            // Self-healing: if the server was restarted or deployed fresh, restore data to server
+            if (isServerMissingProgress(data.problems, merged)) {
+              const currentLocalAct = loadInitialActivity();
+              const mergedAct = mergeActivity(data.activity, currentLocalAct);
+              fetch("/api/state", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  problems: merged,
+                  activity: mergedAct,
+                }),
+              }).catch(() => {});
+            }
+
             return merged;
           });
         }
-        if (data.activity) {
-          setActivity(data.activity);
-          try {
-            localStorage.setItem(
-              "recall-activity-v1",
-              JSON.stringify(data.activity),
-            );
-          } catch {}
+        if (data.activity && typeof data.activity === "object") {
+          setActivity((currentLocalActivity) => {
+            const mergedAct = mergeActivity(data.activity, currentLocalActivity);
+            try {
+              localStorage.setItem("recall-activity-v1", JSON.stringify(mergedAct));
+            } catch {}
+            return mergedAct;
+          });
         }
       })
       .catch(() => {
-        // Keeps local storage data seamlessly
+        // Offline fallback: keep local storage seamlessly
       });
   }, []);
 
@@ -244,69 +261,123 @@ function App() {
   }, [undoStack]);
 
   const dailyCap = 2;
-  const reviewedToday = useMemo(
-    () => problems.filter((problem) => problem.lastReviewed === today),
+
+  // Separate track partitions
+  const dsaProblems = useMemo(
+    () => problems.filter((p) => p.track !== "sql"),
     [problems],
   );
-  const completedTodayCount = reviewedToday.length;
-  const remainingSlots = Math.max(0, dailyCap - completedTodayCount);
+  const sqlProblems = useMemo(
+    () => problems.filter((p) => p.track === "sql"),
+    [problems],
+  );
 
-  const due = useMemo(() => {
-    const unreviewed = problems.filter((p) => p.lastReviewed !== today);
-    return getDueReviews(unreviewed, today, remainingSlots);
-  }, [problems, remainingSlots]);
-
-  const todayPlan = useMemo(
+  // Independent DSA revision metrics (2/day cap)
+  const reviewedTodayDsa = useMemo(
+    () => dsaProblems.filter((p) => p.lastReviewed === today),
+    [dsaProblems],
+  );
+  const completedTodayCountDsa = reviewedTodayDsa.length;
+  const remainingSlotsDsa = Math.max(0, dailyCap - completedTodayCountDsa);
+  const dueDsa = useMemo(() => {
+    const unreviewed = dsaProblems.filter((p) => p.lastReviewed !== today);
+    return getDueReviews(unreviewed, today, remainingSlotsDsa);
+  }, [dsaProblems, remainingSlotsDsa]);
+  const todayPlanDsa = useMemo(
     () =>
-      problems.filter(
-        (problem) =>
-          problem.status === "new" &&
-          problem.plannedDate &&
-          problem.plannedDate <= today,
+      dsaProblems.filter(
+        (p) => p.status === "new" && p.plannedDate && p.plannedDate <= today,
       ),
-    [problems],
+    [dsaProblems],
+  );
+  const solvedTodayDsa = useMemo(
+    () => dsaProblems.filter((p) => p.solvedAt === today),
+    [dsaProblems],
+  );
+  const masteredDsa = useMemo(
+    () => dsaProblems.filter((p) => p.status === "mastered").length,
+    [dsaProblems],
   );
 
-  const solvedToday = useMemo(
-    () => problems.filter((problem) => problem.solvedAt === today),
-    [problems],
+  // Independent SQL revision metrics (2/day cap)
+  const reviewedTodaySql = useMemo(
+    () => sqlProblems.filter((p) => p.lastReviewed === today),
+    [sqlProblems],
   );
-
-  const mastered = useMemo(
-    () => problems.filter((problem) => problem.status === "mastered").length,
-    [problems],
-  );
-
-  const filtered = useMemo(
+  const completedTodayCountSql = reviewedTodaySql.length;
+  const remainingSlotsSql = Math.max(0, dailyCap - completedTodayCountSql);
+  const dueSql = useMemo(() => {
+    const unreviewed = sqlProblems.filter((p) => p.lastReviewed !== today);
+    return getDueReviews(unreviewed, today, remainingSlotsSql);
+  }, [sqlProblems, remainingSlotsSql]);
+  const todayPlanSql = useMemo(
     () =>
-      problems.filter((problem) => {
-        const matchesTopic =
-          filter === "All topics" || problem.category === filter;
-        const matchesDifficulty =
-          difficultyFilter === "All" ||
-          problem.difficulty === difficultyFilter;
-        const matchesSearch = problem.title
-          .toLowerCase()
-          .includes(query.toLowerCase());
-        const isSolved = Boolean(problem.solvedAt);
-        const matchesStatus =
-          statusFilter === "All" ||
-          (statusFilter === "Solved" && isSolved) ||
-          (statusFilter === "Unsolved" && !isSolved);
-
-        return (
-          matchesTopic &&
-          matchesDifficulty &&
-          matchesSearch &&
-          matchesStatus
-        );
-      }),
-    [problems, filter, difficultyFilter, statusFilter, query],
+      sqlProblems.filter(
+        (p) => p.status === "new" && p.plannedDate && p.plannedDate <= today,
+      ),
+    [sqlProblems],
   );
+  const solvedTodaySql = useMemo(
+    () => sqlProblems.filter((p) => p.solvedAt === today),
+    [sqlProblems],
+  );
+  const masteredSql = useMemo(
+    () => sqlProblems.filter((p) => p.status === "mastered").length,
+    [sqlProblems],
+  );
+
+  const totalMastered = masteredDsa + masteredSql;
+
+  // Track-specific filtered problem lists
+  const filteredDsa = useMemo(() => {
+    return dsaProblems.filter((problem) => {
+      const matchesTopic =
+        dsaTopicFilter === "All topics" || problem.category === dsaTopicFilter;
+      const matchesDifficulty =
+        difficultyFilter === "All" || problem.difficulty === difficultyFilter;
+      const matchesSearch = problem.title
+        .toLowerCase()
+        .includes(query.toLowerCase());
+      const isSolved = Boolean(problem.solvedAt);
+      const matchesStatus =
+        statusFilter === "All" ||
+        (statusFilter === "Solved" && isSolved) ||
+        (statusFilter === "Unsolved" && !isSolved);
+
+      return matchesTopic && matchesDifficulty && matchesSearch && matchesStatus;
+    });
+  }, [dsaProblems, dsaTopicFilter, difficultyFilter, statusFilter, query]);
+
+  const filteredSql = useMemo(() => {
+    return sqlProblems.filter((problem) => {
+      const matchesTopic =
+        sqlTopicFilter === "All topics" || problem.category === sqlTopicFilter;
+      const matchesDifficulty =
+        difficultyFilter === "All" || problem.difficulty === difficultyFilter;
+      const matchesSearch = problem.title
+        .toLowerCase()
+        .includes(query.toLowerCase());
+      const isSolved = Boolean(problem.solvedAt);
+      const matchesStatus =
+        statusFilter === "All" ||
+        (statusFilter === "Solved" && isSolved) ||
+        (statusFilter === "Unsolved" && !isSolved);
+
+      return matchesTopic && matchesDifficulty && matchesSearch && matchesStatus;
+    });
+  }, [sqlProblems, sqlTopicFilter, difficultyFilter, statusFilter, query]);
 
   const streak = useMemo(() => calculateStreak(activity, today), [activity]);
 
-  const reviewSchedule = useMemo(
+  const reviewScheduleDsa = useMemo(
+    () => buildReviewSchedule(dsaProblems, today),
+    [dsaProblems],
+  );
+  const reviewScheduleSql = useMemo(
+    () => buildReviewSchedule(sqlProblems, today),
+    [sqlProblems],
+  );
+  const reviewScheduleAll = useMemo(
     () => buildReviewSchedule(problems, today),
     [problems],
   );
@@ -319,6 +390,7 @@ function App() {
       );
       try {
         localStorage.setItem("recall-problems-v1", JSON.stringify(next));
+        localStorage.setItem("recall-problems-backup-v1", JSON.stringify(next));
       } catch {}
       return next;
     });
@@ -498,7 +570,6 @@ function App() {
     if (matchingAction) {
       undoSpecificAction(matchingAction);
     } else {
-      // Revert lastReviewed flag manually
       const patch = {
         lastReviewed: null,
         lastReviewQuality: null,
@@ -603,11 +674,20 @@ function App() {
   }
 
   async function addProblem(form) {
+    const isSql = form.track === "sql";
+    const newProblem = {
+      ...form,
+      track: isSql ? "sql" : "dsa",
+      url: form.url || (isSql ? getSqlLeetCodeUrl(form.title) : getLeetCodeUrl(form.title)),
+      sqlCode: isSql ? form.code || "" : "",
+      pythonCode: !isSql ? form.code || "" : "",
+    };
+
     try {
       const created = await fetch("/api/problems", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(newProblem),
       }).then((response) => response.json());
       setProblems((items) => [...items, created]);
     } catch {
@@ -619,26 +699,41 @@ function App() {
         plannedDate: null,
         solvedAt: null,
         lastReviewed: null,
-        ...form,
+        solveHistory: [],
+        timeComplexity: "",
+        spaceComplexity: "",
+        notes: "",
+        ...newProblem,
       };
       setProblems((items) => [...items, localCreated]);
     }
     setModalOpen(false);
-    showToast(`Added "${form.title}" to your problem library.`);
+    showToast(`Added "${form.title}" to your ${isSql ? "SQL 50" : "DSA"} library.`);
   }
 
   const content =
     activePage === "Dashboard" ? (
       <Dashboard
         problems={problems}
-        due={due}
-        todayPlan={todayPlan}
-        reviewedToday={reviewedToday}
-        solvedToday={solvedToday}
-        mastered={mastered}
+        dsaProblems={dsaProblems}
+        sqlProblems={sqlProblems}
+        dueDsa={dueDsa}
+        dueSql={dueSql}
+        todayPlanDsa={todayPlanDsa}
+        todayPlanSql={todayPlanSql}
+        reviewedTodayDsa={reviewedTodayDsa}
+        reviewedTodaySql={reviewedTodaySql}
+        solvedTodayDsa={solvedTodayDsa}
+        solvedTodaySql={solvedTodaySql}
+        masteredDsa={masteredDsa}
+        masteredSql={masteredSql}
+        totalMastered={totalMastered}
         streak={streak}
         dailyCap={dailyCap}
-        completedTodayCount={completedTodayCount}
+        completedTodayCountDsa={completedTodayCountDsa}
+        completedTodayCountSql={completedTodayCountSql}
+        dashboardTrack={dashboardTrack}
+        setDashboardTrack={setDashboardTrack}
         review={review}
         undoReview={undoReview}
         undoSolve={undoSolve}
@@ -648,33 +743,74 @@ function App() {
         setActivePage={setActivePage}
         activity={activity}
         onOpenHistory={(prob) => setHistoryModalProblem(prob)}
+        today={today}
       />
     ) : activePage === "Review calendar" ? (
       <ReviewCalendar
-        schedule={reviewSchedule}
+        scheduleDsa={reviewScheduleDsa}
+        scheduleSql={reviewScheduleSql}
+        scheduleAll={reviewScheduleAll}
+        calendarTrack={calendarTrack}
+        setCalendarTrack={setCalendarTrack}
         setActivePage={setActivePage}
         today={today}
       />
     ) : activePage === "Learning path" ? (
       <LearningPath
-        problems={problems}
+        dsaProblems={dsaProblems}
+        sqlProblems={sqlProblems}
         setActivePage={setActivePage}
-        setFilter={setFilter}
+        setDsaTopicFilter={setDsaTopicFilter}
+        setSqlTopicFilter={setSqlTopicFilter}
       />
-    ) : (
+    ) : activePage === "SQL 50" ? (
       <ProblemsPage
-        problems={filtered}
-        allProblems={problems}
-        totalCount={problems.length}
-        filter={filter}
+        track="sql"
+        trackTitle="LeetCode SQL 50"
+        trackEyebrow="DATABASE STUDY PLAN"
+        trackDescription="Browse all 50 essential SQL problems across 7 core database categories. Practice joins, window functions, and subqueries with dedicated SQL solution notes and spaced repetition."
+        topics={sqlTopics}
+        topicFilter={sqlTopicFilter}
+        setTopicFilter={setSqlTopicFilter}
         difficultyFilter={difficultyFilter}
         setDifficultyFilter={setDifficultyFilter}
         statusFilter={statusFilter}
         setStatusFilter={setStatusFilter}
+        problems={filteredSql}
+        allProblems={sqlProblems}
+        totalCount={sqlProblems.length}
         expandedNotesId={expandedNotesId}
         setExpandedNotesId={setExpandedNotesId}
         query={query}
-        setFilter={setFilter}
+        setModalOpen={setModalOpen}
+        onOpenNotes={(problem) => setActiveNotesProblem(problem)}
+        review={review}
+        undoReview={undoReview}
+        planProblem={planProblem}
+        markSolved={markSolved}
+        resetProblem={resetProblem}
+        today={today}
+        onOpenHistory={(prob) => setHistoryModalProblem(prob)}
+      />
+    ) : (
+      <ProblemsPage
+        track="dsa"
+        trackTitle="DSA Problems (NeetCode 150)"
+        trackEyebrow="CURATED CURRICULUM"
+        trackDescription="Browse all 150 curated NeetCode problems across 18 core topics. Filter by difficulty, topic, or solved status. Click any problem to open it directly on LeetCode, or expand notes for Python solutions."
+        topics={dsaTopics}
+        topicFilter={dsaTopicFilter}
+        setTopicFilter={setDsaTopicFilter}
+        difficultyFilter={difficultyFilter}
+        setDifficultyFilter={setDifficultyFilter}
+        statusFilter={statusFilter}
+        setStatusFilter={setStatusFilter}
+        problems={filteredDsa}
+        allProblems={dsaProblems}
+        totalCount={dsaProblems.length}
+        expandedNotesId={expandedNotesId}
+        setExpandedNotesId={setExpandedNotesId}
+        query={query}
         setModalOpen={setModalOpen}
         onOpenNotes={(problem) => setActiveNotesProblem(problem)}
         review={review}
@@ -692,7 +828,8 @@ function App() {
       <Sidebar
         activePage={activePage}
         setActivePage={setActivePage}
-        totalProblems={problems.length}
+        dsaCount={dsaProblems.length}
+        sqlCount={sqlProblems.length}
         setHelpOpen={setHelpOpen}
         setSettingsOpen={setSettingsOpen}
       />
@@ -710,12 +847,14 @@ function App() {
                 setQuery(event.target.value);
                 if (
                   event.target.value.trim() &&
+                  activePage !== "DSA Problems" &&
+                  activePage !== "SQL 50" &&
                   activePage !== "My problems"
                 ) {
-                  setActivePage("My problems");
+                  setActivePage("DSA Problems");
                 }
               }}
-              placeholder="Search your problems..."
+              placeholder="Search problems across DSA & SQL 50..."
             />
             <span>⌘ K</span>
           </div>
@@ -740,7 +879,7 @@ function App() {
             <button
               className="icon-button"
               onClick={() =>
-                showToast("All notifications up to date.")
+                showToast("All recall schedules and notes are synced.")
               }
               aria-label="Notifications"
             >
@@ -797,8 +936,10 @@ function App() {
           activity={activity}
           setProblems={setProblems}
           setActivity={setActivity}
-          problemsCount={problems.length}
-          masteredCount={mastered}
+          dsaCount={dsaProblems.length}
+          sqlCount={sqlProblems.length}
+          masteredDsa={masteredDsa}
+          masteredSql={masteredSql}
           dark={dark}
           setDark={setDark}
           showToast={showToast}
@@ -830,15 +971,17 @@ function App() {
 function Sidebar({
   activePage,
   setActivePage,
-  totalProblems,
+  dsaCount,
+  sqlCount,
   setHelpOpen,
   setSettingsOpen,
 }) {
   const items = [
-    [Home, "Dashboard"],
-    [Layers3, "My problems"],
-    [CalendarDays, "Review calendar"],
-    [Target, "Learning path"],
+    [Home, "Dashboard", null],
+    [Code2, "DSA Problems", dsaCount],
+    [Database, "SQL 50", sqlCount],
+    [CalendarDays, "Review calendar", null],
+    [Target, "Learning path", null],
   ];
 
   return (
@@ -853,17 +996,22 @@ function Sidebar({
       </div>
       <div className="nav-label">WORKSPACE</div>
       <nav>
-        {items.map(([Icon, label]) => (
-          <button
-            key={label}
-            className={activePage === label ? "nav-item active" : "nav-item"}
-            onClick={() => setActivePage(label)}
-          >
-            <Icon size={19} />
-            {label}
-            {label === "My problems" && <b>{totalProblems}</b>}
-          </button>
-        ))}
+        {items.map(([Icon, label, count]) => {
+          const isActive =
+            activePage === label ||
+            (label === "DSA Problems" && activePage === "My problems");
+          return (
+            <button
+              key={label}
+              className={isActive ? "nav-item active" : "nav-item"}
+              onClick={() => setActivePage(label)}
+            >
+              <Icon size={19} />
+              {label}
+              {count !== null && <b>{count}</b>}
+            </button>
+          );
+        })}
       </nav>
       <div className="sidebar-bottom">
         <button className="nav-item" onClick={() => setHelpOpen(true)}>
@@ -877,8 +1025,8 @@ function Sidebar({
         <div className="upgrade" onClick={() => setActivePage("Learning path")}>
           <Sparkles size={18} />
           <div>
-            <strong>Become a master</strong>
-            <span>Build your streak daily</span>
+            <strong>Dual Mastery</strong>
+            <span>DSA 150 + SQL 50</span>
           </div>
           <ChevronRight size={17} />
         </div>
@@ -889,14 +1037,25 @@ function Sidebar({
 
 function Dashboard({
   problems,
-  due,
-  todayPlan,
-  reviewedToday,
-  solvedToday,
-  mastered,
+  dsaProblems,
+  sqlProblems,
+  dueDsa,
+  dueSql,
+  todayPlanDsa,
+  todayPlanSql,
+  reviewedTodayDsa,
+  reviewedTodaySql,
+  solvedTodayDsa,
+  solvedTodaySql,
+  masteredDsa,
+  masteredSql,
+  totalMastered,
   streak,
   dailyCap,
-  completedTodayCount,
+  completedTodayCountDsa,
+  completedTodayCountSql,
+  dashboardTrack,
+  setDashboardTrack,
   review,
   undoReview,
   undoSolve,
@@ -906,8 +1065,13 @@ function Dashboard({
   setActivePage,
   activity,
   onOpenHistory,
+  today,
 }) {
   const totalCount = problems.length;
+  const totalDueCount = dueDsa.length + dueSql.length;
+  const totalCompletedCount = completedTodayCountDsa + completedTodayCountSql;
+  const bothCapsCompleted =
+    completedTodayCountDsa >= dailyCap && completedTodayCountSql >= dailyCap;
 
   return (
     <section className="page dashboard">
@@ -918,8 +1082,7 @@ function Dashboard({
             Good morning, Akhilesh <span>✦</span>
           </h1>
           <p className="muted">
-            Solve as much as you want. Revision is focused at {dailyCap} problems
-            a day.
+            Independent revision queues: {dailyCap} DSA problems/day + {dailyCap} SQL 50 problems/day.
           </p>
         </div>
         <button className="primary" onClick={() => setModalOpen(true)}>
@@ -933,46 +1096,60 @@ function Dashboard({
           <div className="hero-copy">
             <div className="section-kicker">
               <Sparkles size={16} />
-              YOUR DAILY FOCUS
+              YOUR DUAL REVISION FOCUS
             </div>
             <h2>
-              {completedTodayCount >= dailyCap
-                ? "Daily goal completed!"
-                : due.length
-                  ? `${due.length} review${due.length === 1 ? "" : "s"} ready`
-                  : "Build today’s plan"}
+              {bothCapsCompleted
+                ? "All daily review goals achieved!"
+                : totalDueCount > 0
+                  ? `${totalDueCount} review${totalDueCount === 1 ? "" : "s"} ready today`
+                  : "Daily queues clear"}
             </h2>
             <p>
-              {completedTodayCount >= dailyCap
-                ? `You finished your ${dailyCap} reviews today! Overdue reviews roll forward cleanly.`
-                : due.length
-                  ? `Your oldest due recalls are scheduled (target: ${dailyCap}/day).`
-                  : "Choose any number of fresh problems and solve them at your pace."}
+              {bothCapsCompleted
+                ? `Completed ${completedTodayCountDsa}/${dailyCap} DSA and ${completedTodayCountSql}/${dailyCap} SQL reviews today! Extra recalls roll forward cleanly.`
+                : `DSA: ${completedTodayCountDsa}/${dailyCap} reviewed • SQL: ${completedTodayCountSql}/${dailyCap} reviewed. Reviews are capped at ${dailyCap}/day per track to prevent burnout.`}
             </p>
-            <button
-              className="dark-button"
-              onClick={() => {
-                if (due.length > 0) {
-                  document
-                    .getElementById(`review-${due[0].id}`)
-                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                } else {
-                  document
-                    .getElementById("today-plan")
-                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                }
-              }}
-            >
-              {due.length ? (
-                <>
-                  Start reviewing <ArrowUpRight size={17} />
-                </>
-              ) : (
-                <>
-                  Choose problems <ArrowUpRight size={17} />
-                </>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+              {dueDsa.length > 0 && (
+                <button
+                  className="dark-button"
+                  onClick={() => {
+                    setDashboardTrack("all");
+                    setTimeout(() => {
+                      document
+                        .getElementById("dsa-revision-section")
+                        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 50);
+                  }}
+                >
+                  <Code2 size={16} /> Review DSA ({dueDsa.length}) <ArrowUpRight size={15} />
+                </button>
               )}
-            </button>
+              {dueSql.length > 0 && (
+                <button
+                  className="dark-button"
+                  onClick={() => {
+                    setDashboardTrack("all");
+                    setTimeout(() => {
+                      document
+                        .getElementById("sql-revision-section")
+                        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 50);
+                  }}
+                >
+                  <Database size={16} /> Review SQL 50 ({dueSql.length}) <ArrowUpRight size={15} />
+                </button>
+              )}
+              {totalDueCount === 0 && (
+                <button
+                  className="dark-button"
+                  onClick={() => setActivePage("DSA Problems")}
+                >
+                  Browse libraries <ArrowUpRight size={16} />
+                </button>
+              )}
+            </div>
           </div>
           <div className="orbit">
             <div className="orbit-ring ring-one" />
@@ -982,281 +1159,610 @@ function Dashboard({
             </div>
             <span className="float-card card-a">
               <Code2 size={15} />
-              Recall
+              DSA (150)
             </span>
             <span className="float-card card-b">
-              <Trophy size={15} />
-              Level 8
+              <Database size={15} />
+              SQL 50
             </span>
           </div>
         </div>
         <StatCards
-          mastered={mastered}
+          masteredDsa={masteredDsa}
+          masteredSql={masteredSql}
+          totalMastered={totalMastered}
           streak={streak}
           totalCount={totalCount}
         />
       </div>
 
+      {/* Track Selection Switcher for Dashboard */}
+      <div className="dashboard-track-bar">
+        <button
+          className={`dashboard-track-tab ${dashboardTrack === "all" ? "active" : ""}`}
+          onClick={() => setDashboardTrack("all")}
+        >
+          All Revision Tracks <small>({totalCompletedCount}/4 done)</small>
+        </button>
+        <button
+          className={`dashboard-track-tab ${dashboardTrack === "dsa" ? "active" : ""}`}
+          onClick={() => setDashboardTrack("dsa")}
+        >
+          <Code2 size={14} /> DSA Revision <small>({completedTodayCountDsa}/{dailyCap})</small>
+        </button>
+        <button
+          className={`dashboard-track-tab ${dashboardTrack === "sql" ? "active" : ""}`}
+          onClick={() => setDashboardTrack("sql")}
+        >
+          <Database size={14} /> SQL 50 Revision <small>({completedTodayCountSql}/{dailyCap})</small>
+        </button>
+      </div>
+
       <div className="content-grid">
         <div className="due-section">
-          <section className="today-section" id="today-plan">
-            <div className="section-heading">
-              <div>
-                <h2>
-                  Today’s solve list <span>{todayPlan.length}</span>
-                </h2>
-                <p>
-                  Pick fresh problems from your library—then mark them solved
-                  to start their spaced repetition schedule.
-                </p>
-              </div>
-              <button
-                className="text-button"
-                onClick={() => setActivePage("My problems")}
-              >
-                Browse library <ChevronRight size={16} />
-              </button>
-            </div>
-
-            <div className="problem-list">
-              {todayPlan.length ? (
-                todayPlan.map((problem) => (
-                  <article className="problem-card plan-card" key={problem.id}>
-                    <div className="problem-number">
-                      {String(problem.id).padStart(2, "0")}
-                    </div>
-                    <div className="problem-info">
-                      <h3>
-                        <a
-                          href={problem.url || getLeetCodeUrl(problem.title)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="problem-title-link"
-                          title={`Open "${problem.title}" on LeetCode`}
-                        >
-                          {problem.title} <ArrowUpRight size={14} />
-                        </a>
-                      </h3>
-                      <p>
-                        {problem.category}
-                        <span>•</span>
-                        <b
-                          className={`difficulty ${problem.difficulty.toLowerCase()}`}
-                        >
-                          {problem.difficulty}
-                        </b>
-                      </p>
-                      {getSolveHistory(problem).length > 0 && onOpenHistory && (
-                        <button
-                          type="button"
-                          className="card-solve-meta"
-                          onClick={() => onOpenHistory(problem)}
-                          title="Click to view solve timeline"
-                        >
-                          <History size={12} />
-                          <span>
-                            {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
-                          </span>
-                        </button>
-                      )}
-                    </div>
-                    <button
-                      className="remove-plan"
-                      onClick={() => planProblem(problem)}
-                    >
-                      Remove
-                    </button>
-                    <button
-                      className="solve-button"
-                      onClick={() => markSolved(problem)}
-                    >
-                      <Check size={16} />
-                      Solved today
-                    </button>
-                  </article>
-                ))
-              ) : (
-                <div className="empty">
-                  No problems in today’s solve list. Choose fresh problems from
-                  your library to practice.
-                </div>
-              )}
-            </div>
-
-            {solvedToday.length > 0 && (
-              <div className="reviewed-today-section">
-                <h3>
-                  <Check size={15} /> Solved today ({solvedToday.length})
-                </h3>
-                <div className="problem-list">
-                  {solvedToday.map((problem) => (
-                    <article
-                      className="problem-card reviewed-card"
-                      key={problem.id}
-                    >
-                      <div className="problem-number">
-                        {String(problem.id).padStart(2, "0")}
-                      </div>
-                      <div className="problem-info">
-                        <h3>
-                          <a
-                            href={problem.url || getLeetCodeUrl(problem.title)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="problem-title-link"
-                            title={`Open "${problem.title}" on LeetCode`}
-                          >
-                            {problem.title} <ArrowUpRight size={14} />
-                          </a>
-                        </h3>
-                        <p>
-                          <span className="reviewed-badge">Solved</span>
-                          Next recall scheduled:{" "}
-                          <b>{formatDate(problem.nextReview)}</b>
-                        </p>
-                        {onOpenHistory && (
-                          <button
-                            type="button"
-                            className="card-solve-meta"
-                            onClick={() => onOpenHistory(problem)}
-                            title="Click to view solve timeline"
-                          >
-                            <History size={12} />
-                            <span>
-                              {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
-                            </span>
-                          </button>
-                        )}
-                      </div>
-                      <button
-                        className="undo-button"
-                        onClick={() => undoSolve(problem)}
-                      >
-                        <Undo2 size={13} />
-                        Undo solve
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section className="review-section">
-            <div className="section-heading">
-              <div>
-                <h2>
-                  Due for review{" "}
-                  <span>
-                    {completedTodayCount}/{dailyCap} completed
+          {/* DSA REVISION SECTION */}
+          {(dashboardTrack === "all" || dashboardTrack === "dsa") && (
+            <div className="revision-track-card" id="dsa-revision-section">
+              <div className="revision-track-header">
+                <div className="revision-track-title">
+                  <span className="track-kicker dsa">
+                    <Code2 size={13} /> DSA Track • NeetCode 150
                   </span>
-                </h2>
-                <p>
-                  At most {dailyCap} recalls are scheduled per day to prevent
-                  burnout.
-                </p>
-              </div>
-            </div>
-
-            {completedTodayCount >= dailyCap && (
-              <div className="daily-completed-banner">
-                <div>
-                  <strong>🎉 Daily review target completed!</strong>
+                  <h2>
+                    DSA Spaced Repetition Focus
+                  </h2>
                   <p>
-                    You reviewed {completedTodayCount} problem
-                    {completedTodayCount === 1 ? "" : "s"} today. Any further
-                    recalls roll cleanly into tomorrow.
+                    Data structures & algorithms recall. Independent {dailyCap} problems/day cap.
                   </p>
                 </div>
-                <button onClick={() => setActivePage("My problems")}>
-                  Practice more in library
-                </button>
-              </div>
-            )}
-
-            <div className="problem-list">
-              {due.length ? (
-                due.map((problem) => (
-                  <ProblemCard
-                    key={problem.id}
-                    problem={problem}
-                    review={review}
-                    onOpenHistory={onOpenHistory}
-                  />
-                ))
-              ) : completedTodayCount >= dailyCap ? null : (
-                <div className="empty">
-                  No recalls due today. Your next solved problem starts its
-                  review cycle.
+                <div className="revision-cap-status">
+                  <span
+                    className={`revision-cap-badge ${completedTodayCountDsa >= dailyCap ? "complete" : ""}`}
+                  >
+                    {completedTodayCountDsa >= dailyCap
+                      ? "✓ Cap reached (2/2)"
+                      : `${completedTodayCountDsa}/${dailyCap} completed today`}
+                  </span>
                 </div>
-              )}
-            </div>
+              </div>
 
-            {reviewedToday.length > 0 && (
-              <div className="reviewed-today-section">
-                <h3>
-                  <Check size={15} /> Reviewed today ({reviewedToday.length})
-                </h3>
+              {/* DSA Today's Solve List */}
+              <section className="today-section" style={{ marginBottom: 24 }}>
+                <div className="section-heading">
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16 }}>
+                      DSA Today’s solve list <span>{todayPlanDsa.length}</span>
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--muted)" }}>
+                      Fresh DSA problems chosen for practice today.
+                    </p>
+                  </div>
+                  <button
+                    className="text-button"
+                    onClick={() => setActivePage("DSA Problems")}
+                  >
+                    Browse DSA library <ChevronRight size={15} />
+                  </button>
+                </div>
+
                 <div className="problem-list">
-                  {reviewedToday.map((problem) => (
-                    <article
-                      className="problem-card reviewed-card"
-                      key={problem.id}
-                    >
-                      <div className="problem-number">
-                        {String(problem.id).padStart(2, "0")}
-                      </div>
-                      <div className="problem-info">
-                        <h3>
-                          <a
-                            href={problem.url || getLeetCodeUrl(problem.title)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="problem-title-link"
-                            title={`Open "${problem.title}" on LeetCode`}
-                          >
-                            {problem.title} <ArrowUpRight size={14} />
-                          </a>
-                        </h3>
-                        <p>
-                          <span className="reviewed-badge">
-                            {problem.lastReviewQuality === "again"
-                              ? "Again (1d)"
-                              : "Remembered"}
-                          </span>
-                          Next review: <b>{formatDate(problem.nextReview)}</b>
-                        </p>
-                        {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                  {todayPlanDsa.length ? (
+                    todayPlanDsa.map((problem) => (
+                      <article className="problem-card plan-card" key={problem.id}>
+                        <div className="problem-number">
+                          {String(problem.id).padStart(2, "0")}
+                        </div>
+                        <div className="problem-info">
+                          <h3>
+                            <a
+                              href={problem.url || getLeetCodeUrl(problem.title)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="problem-title-link"
+                              title={`Open "${problem.title}" on LeetCode`}
+                            >
+                              {problem.title} <ArrowUpRight size={14} />
+                            </a>
+                          </h3>
+                          <p>
+                            {problem.category}
+                            <span>•</span>
+                            <b
+                              className={`difficulty ${problem.difficulty.toLowerCase()}`}
+                            >
+                              {problem.difficulty}
+                            </b>
+                          </p>
+                          {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                            <button
+                              type="button"
+                              className="card-solve-meta"
+                              onClick={() => onOpenHistory(problem)}
+                              title="Click to view solve timeline"
+                            >
+                              <History size={12} />
+                              <span>
+                                {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                        <button
+                          className="remove-plan"
+                          onClick={() => planProblem(problem)}
+                        >
+                          Remove
+                        </button>
+                        <button
+                          className="solve-button"
+                          onClick={() => markSolved(problem)}
+                        >
+                          <Check size={16} />
+                          Solved today
+                        </button>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty">
+                      No DSA problems planned for today. Pick fresh problems from your DSA library.
+                    </div>
+                  )}
+                </div>
+
+                {solvedTodayDsa.length > 0 && (
+                  <div className="reviewed-today-section">
+                    <h3>
+                      <Check size={15} /> DSA Solved today ({solvedTodayDsa.length})
+                    </h3>
+                    <div className="problem-list">
+                      {solvedTodayDsa.map((problem) => (
+                        <article
+                          className="problem-card reviewed-card"
+                          key={problem.id}
+                        >
+                          <div className="problem-number">
+                            {String(problem.id).padStart(2, "0")}
+                          </div>
+                          <div className="problem-info">
+                            <h3>
+                              <a
+                                href={problem.url || getLeetCodeUrl(problem.title)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="problem-title-link"
+                                title={`Open "${problem.title}" on LeetCode`}
+                              >
+                                {problem.title} <ArrowUpRight size={14} />
+                              </a>
+                            </h3>
+                            <p>
+                              <span className="reviewed-badge">Solved</span>
+                              Next recall scheduled: <b>{formatDate(problem.nextReview)}</b>
+                            </p>
+                            {onOpenHistory && (
+                              <button
+                                type="button"
+                                className="card-solve-meta"
+                                onClick={() => onOpenHistory(problem)}
+                                title="Click to view solve timeline"
+                              >
+                                <History size={12} />
+                                <span>
+                                  {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                                </span>
+                              </button>
+                            )}
+                          </div>
                           <button
-                            type="button"
-                            className="card-solve-meta"
-                            onClick={() => onOpenHistory(problem)}
-                            title="Click to view solve timeline"
+                            className="undo-button"
+                            onClick={() => undoSolve(problem)}
                           >
-                            <History size={12} />
-                            <span>
-                              {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
-                            </span>
+                            <Undo2 size={13} />
+                            Undo solve
                           </button>
-                        )}
-                      </div>
-                      <button
-                        className="undo-button"
-                        onClick={() => undoReview(problem)}
-                      >
-                        <Undo2 size={13} />
-                        Undo review
-                      </button>
-                    </article>
-                  ))}
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* DSA Due for Review */}
+              <section className="review-section">
+                <div className="section-heading">
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16 }}>
+                      DSA Due for review{" "}
+                      <span>
+                        {completedTodayCountDsa}/{dailyCap} completed
+                      </span>
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--muted)" }}>
+                      Capped at {dailyCap} DSA recalls per day. Overdue items roll forward automatically.
+                    </p>
+                  </div>
+                </div>
+
+                {completedTodayCountDsa >= dailyCap && (
+                  <div className="daily-completed-banner">
+                    <div>
+                      <strong>🎉 DSA daily review target completed!</strong>
+                      <p>
+                        You reviewed {completedTodayCountDsa} DSA problems today.
+                        Further recalls roll forward into tomorrow.
+                      </p>
+                    </div>
+                    <button onClick={() => setActivePage("DSA Problems")}>
+                      Practice more DSA
+                    </button>
+                  </div>
+                )}
+
+                <div className="problem-list">
+                  {dueDsa.length ? (
+                    dueDsa.map((problem) => (
+                      <ProblemCard
+                        key={problem.id}
+                        problem={problem}
+                        review={review}
+                        onOpenHistory={onOpenHistory}
+                      />
+                    ))
+                  ) : completedTodayCountDsa >= dailyCap ? null : (
+                    <div className="empty">
+                      No DSA recalls due today. Your next solved DSA problem will start its review cycle.
+                    </div>
+                  )}
+                </div>
+
+                {reviewedTodayDsa.length > 0 && (
+                  <div className="reviewed-today-section">
+                    <h3>
+                      <Check size={15} /> DSA Reviewed today ({reviewedTodayDsa.length})
+                    </h3>
+                    <div className="problem-list">
+                      {reviewedTodayDsa.map((problem) => (
+                        <article
+                          className="problem-card reviewed-card"
+                          key={problem.id}
+                        >
+                          <div className="problem-number">
+                            {String(problem.id).padStart(2, "0")}
+                          </div>
+                          <div className="problem-info">
+                            <h3>
+                              <a
+                                href={problem.url || getLeetCodeUrl(problem.title)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="problem-title-link"
+                                title={`Open "${problem.title}" on LeetCode`}
+                              >
+                                {problem.title} <ArrowUpRight size={14} />
+                              </a>
+                            </h3>
+                            <p>
+                              <span className="reviewed-badge">
+                                {problem.lastReviewQuality === "again"
+                                  ? "Again (1d)"
+                                  : "Remembered"}
+                              </span>
+                              Next review: <b>{formatDate(problem.nextReview)}</b>
+                            </p>
+                            {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                              <button
+                                type="button"
+                                className="card-solve-meta"
+                                onClick={() => onOpenHistory(problem)}
+                                title="Click to view solve timeline"
+                              >
+                                <History size={12} />
+                                <span>
+                                  {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                                </span>
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            className="undo-button"
+                            onClick={() => undoReview(problem)}
+                          >
+                            <Undo2 size={13} />
+                            Undo review
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+
+          {/* SQL 50 REVISION SECTION */}
+          {(dashboardTrack === "all" || dashboardTrack === "sql") && (
+            <div className="revision-track-card" id="sql-revision-section">
+              <div className="revision-track-header">
+                <div className="revision-track-title">
+                  <span className="track-kicker sql">
+                    <Database size={13} /> Database Track • LeetCode SQL 50
+                  </span>
+                  <h2>
+                    SQL 50 Spaced Repetition Focus
+                  </h2>
+                  <p>
+                    SQL queries, joins, aggregates, and windows. Independent {dailyCap} problems/day cap.
+                  </p>
+                </div>
+                <div className="revision-cap-status">
+                  <span
+                    className={`revision-cap-badge ${completedTodayCountSql >= dailyCap ? "complete" : ""}`}
+                  >
+                    {completedTodayCountSql >= dailyCap
+                      ? "✓ Cap reached (2/2)"
+                      : `${completedTodayCountSql}/${dailyCap} completed today`}
+                  </span>
                 </div>
               </div>
-            )}
-          </section>
+
+              {/* SQL Today's Solve List */}
+              <section className="today-section" style={{ marginBottom: 24 }}>
+                <div className="section-heading">
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16 }}>
+                      SQL 50 Today’s solve list <span>{todayPlanSql.length}</span>
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--muted)" }}>
+                      SQL problems planned for practice today.
+                    </p>
+                  </div>
+                  <button
+                    className="text-button"
+                    onClick={() => setActivePage("SQL 50")}
+                  >
+                    Browse SQL 50 library <ChevronRight size={15} />
+                  </button>
+                </div>
+
+                <div className="problem-list">
+                  {todayPlanSql.length ? (
+                    todayPlanSql.map((problem) => (
+                      <article className="problem-card plan-card" key={problem.id}>
+                        <div className="problem-number">
+                          {String(problem.id).padStart(2, "0")}
+                        </div>
+                        <div className="problem-info">
+                          <h3>
+                            <a
+                              href={problem.url || getSqlLeetCodeUrl(problem.title)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="problem-title-link"
+                              title={`Open "${problem.title}" on LeetCode`}
+                            >
+                              {problem.title} <ArrowUpRight size={14} />
+                            </a>
+                          </h3>
+                          <p>
+                            {problem.category}
+                            <span>•</span>
+                            <b
+                              className={`difficulty ${problem.difficulty.toLowerCase()}`}
+                            >
+                              {problem.difficulty}
+                            </b>
+                          </p>
+                          {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                            <button
+                              type="button"
+                              className="card-solve-meta"
+                              onClick={() => onOpenHistory(problem)}
+                              title="Click to view solve timeline"
+                            >
+                              <History size={12} />
+                              <span>
+                                {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                        <button
+                          className="remove-plan"
+                          onClick={() => planProblem(problem)}
+                        >
+                          Remove
+                        </button>
+                        <button
+                          className="solve-button"
+                          onClick={() => markSolved(problem)}
+                        >
+                          <Check size={16} />
+                          Solved today
+                        </button>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty">
+                      No SQL problems planned for today. Pick fresh problems from your SQL 50 library.
+                    </div>
+                  )}
+                </div>
+
+                {solvedTodaySql.length > 0 && (
+                  <div className="reviewed-today-section">
+                    <h3>
+                      <Check size={15} /> SQL 50 Solved today ({solvedTodaySql.length})
+                    </h3>
+                    <div className="problem-list">
+                      {solvedTodaySql.map((problem) => (
+                        <article
+                          className="problem-card reviewed-card"
+                          key={problem.id}
+                        >
+                          <div className="problem-number">
+                            {String(problem.id).padStart(2, "0")}
+                          </div>
+                          <div className="problem-info">
+                            <h3>
+                              <a
+                                href={problem.url || getSqlLeetCodeUrl(problem.title)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="problem-title-link"
+                                title={`Open "${problem.title}" on LeetCode`}
+                              >
+                                {problem.title} <ArrowUpRight size={14} />
+                              </a>
+                            </h3>
+                            <p>
+                              <span className="reviewed-badge">Solved</span>
+                              Next recall scheduled: <b>{formatDate(problem.nextReview)}</b>
+                            </p>
+                            {onOpenHistory && (
+                              <button
+                                type="button"
+                                className="card-solve-meta"
+                                onClick={() => onOpenHistory(problem)}
+                                title="Click to view solve timeline"
+                              >
+                                <History size={12} />
+                                <span>
+                                  {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                                </span>
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            className="undo-button"
+                            onClick={() => undoSolve(problem)}
+                          >
+                            <Undo2 size={13} />
+                            Undo solve
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* SQL Due for Review */}
+              <section className="review-section">
+                <div className="section-heading">
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16 }}>
+                      SQL 50 Due for review{" "}
+                      <span>
+                        {completedTodayCountSql}/{dailyCap} completed
+                      </span>
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--muted)" }}>
+                      Capped at {dailyCap} SQL recalls per day. Overdue items roll forward automatically.
+                    </p>
+                  </div>
+                </div>
+
+                {completedTodayCountSql >= dailyCap && (
+                  <div className="daily-completed-banner">
+                    <div>
+                      <strong>🎉 SQL 50 daily review target completed!</strong>
+                      <p>
+                        You reviewed {completedTodayCountSql} SQL problems today.
+                        Further recalls roll forward into tomorrow.
+                      </p>
+                    </div>
+                    <button onClick={() => setActivePage("SQL 50")}>
+                      Practice more SQL
+                    </button>
+                  </div>
+                )}
+
+                <div className="problem-list">
+                  {dueSql.length ? (
+                    dueSql.map((problem) => (
+                      <ProblemCard
+                        key={problem.id}
+                        problem={problem}
+                        review={review}
+                        onOpenHistory={onOpenHistory}
+                      />
+                    ))
+                  ) : completedTodayCountSql >= dailyCap ? null : (
+                    <div className="empty">
+                      No SQL recalls due today. Your next solved SQL problem will start its review cycle.
+                    </div>
+                  )}
+                </div>
+
+                {reviewedTodaySql.length > 0 && (
+                  <div className="reviewed-today-section">
+                    <h3>
+                      <Check size={15} /> SQL 50 Reviewed today ({reviewedTodaySql.length})
+                    </h3>
+                    <div className="problem-list">
+                      {reviewedTodaySql.map((problem) => (
+                        <article
+                          className="problem-card reviewed-card"
+                          key={problem.id}
+                        >
+                          <div className="problem-number">
+                            {String(problem.id).padStart(2, "0")}
+                          </div>
+                          <div className="problem-info">
+                            <h3>
+                              <a
+                                href={problem.url || getSqlLeetCodeUrl(problem.title)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="problem-title-link"
+                                title={`Open "${problem.title}" on LeetCode`}
+                              >
+                                {problem.title} <ArrowUpRight size={14} />
+                              </a>
+                            </h3>
+                            <p>
+                              <span className="reviewed-badge">
+                                {problem.lastReviewQuality === "again"
+                                  ? "Again (1d)"
+                                  : "Remembered"}
+                              </span>
+                              Next review: <b>{formatDate(problem.nextReview)}</b>
+                            </p>
+                            {getSolveHistory(problem).length > 0 && onOpenHistory && (
+                              <button
+                                type="button"
+                                className="card-solve-meta"
+                                onClick={() => onOpenHistory(problem)}
+                                title="Click to view solve timeline"
+                              >
+                                <History size={12} />
+                                <span>
+                                  {getSolveHistory(problem).length}× (Last: {formatDate(getLastSolvedDate(problem))})
+                                </span>
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            className="undo-button"
+                            onClick={() => undoReview(problem)}
+                          >
+                            <Undo2 size={13} />
+                            Undo review
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
         </div>
 
         <ProgressCard
           problems={problems}
+          dsaProblems={dsaProblems}
+          sqlProblems={sqlProblems}
           activity={activity}
           setActivePage={setActivePage}
           today={today}
@@ -1266,7 +1772,7 @@ function Dashboard({
   );
 }
 
-function StatCards({ mastered, streak, totalCount }) {
+function StatCards({ masteredDsa, masteredSql, totalMastered, streak, totalCount }) {
   return (
     <>
       <div className="stat-card streak">
@@ -1290,27 +1796,27 @@ function StatCards({ mastered, streak, totalCount }) {
         </div>
         <em>
           {streak
-            ? "Keep it alive with one study action today."
-            : "Complete a solve or review to start your streak."}
+            ? "Keep it alive with one solve or review today."
+            : "Complete a study action to start your streak."}
         </em>
       </div>
       <div className="stat-card">
         <div className="stat-icon violet">
           <Trophy size={20} />
         </div>
-        <span>Mastered</span>
+        <span>Mastered (4+ recalls)</span>
         <strong>
-          {mastered}
+          {totalMastered}
           <small>/ {totalCount}</small>
         </strong>
         <div className="progress">
           <i
             style={{
-              width: `${totalCount ? (mastered / totalCount) * 100 : 0}%`,
+              width: `${totalCount ? (totalMastered / totalCount) * 100 : 0}%`,
             }}
           />
         </div>
-        <em>{Math.max(0, totalCount - mastered)} problems to go</em>
+        <em>DSA: {masteredDsa}/150 • SQL: {masteredSql}/50</em>
       </div>
     </>
   );
@@ -1322,6 +1828,12 @@ function ProblemCard({ problem, review, onOpenHistory }) {
   const history = getSolveHistory(problem);
   const solveCount = history.length;
   const lastDate = getLastSolvedDate(problem);
+  const isSql = problem.track === "sql" || problem.id > 1000;
+  const leetCodeUrl =
+    problem.url ||
+    (isSql
+      ? getSqlLeetCodeUrl(problem.title)
+      : getLeetCodeUrl(problem.title));
 
   return (
     <article className="problem-card" id={`review-${problem.id}`}>
@@ -1331,7 +1843,7 @@ function ProblemCard({ problem, review, onOpenHistory }) {
       <div className="problem-info">
         <h3>
           <a
-            href={problem.url || getLeetCodeUrl(problem.title)}
+            href={leetCodeUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="problem-title-link"
@@ -1341,6 +1853,10 @@ function ProblemCard({ problem, review, onOpenHistory }) {
           </a>
         </h3>
         <p>
+          <span className={`track-badge ${isSql ? "sql" : "dsa"}`} style={{ marginRight: 6 }}>
+            {isSql ? <Database size={10} /> : <Code2 size={10} />}
+            {isSql ? "SQL" : "DSA"}
+          </span>
           {problem.category}
           <span>•</span>
           <b className={`difficulty ${problem.difficulty.toLowerCase()}`}>
@@ -1383,9 +1899,18 @@ function ProblemCard({ problem, review, onOpenHistory }) {
   );
 }
 
-function ProgressCard({ problems, activity, setActivePage, today }) {
+function ProgressCard({
+  problems,
+  dsaProblems,
+  sqlProblems,
+  activity,
+  setActivePage,
+  today,
+}) {
   const total = problems.length || 1;
   const solved = problems.filter((problem) => problem.solvedAt).length;
+  const solvedDsa = dsaProblems.filter((p) => p.solvedAt).length;
+  const solvedSql = sqlProblems.filter((p) => p.solvedAt).length;
   const days = buildHeatmap(activity, today);
 
   return (
@@ -1393,7 +1918,7 @@ function ProgressCard({ problems, activity, setActivePage, today }) {
       <div className="section-heading">
         <div>
           <h2>Your progress</h2>
-          <p>Based on your recorded study actions.</p>
+          <p>Recorded actions across both curriculums.</p>
         </div>
         <button
           className="icon-button"
@@ -1413,13 +1938,12 @@ function ProgressCard({ problems, activity, setActivePage, today }) {
           <span>{Math.round((solved / total) * 100)}%</span>
         </div>
         <div>
-          <strong>NeetCode Catalog</strong>
+          <strong>NeetCode & SQL 50</strong>
           <p>
-            {solved} of {total} solved
+            {solved} of {total} total solved
           </p>
-          <div className="legend">
-            <i />
-            <span>Solved percentage</span>
+          <div className="legend" style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+            <span>DSA: {solvedDsa}/150 • SQL: {solvedSql}/50</span>
           </div>
         </div>
       </div>
@@ -1454,8 +1978,23 @@ function ProgressCard({ problems, activity, setActivePage, today }) {
   );
 }
 
-function ReviewCalendar({ schedule, setActivePage, today }) {
+function ReviewCalendar({
+  scheduleDsa,
+  scheduleSql,
+  scheduleAll,
+  calendarTrack,
+  setCalendarTrack,
+  setActivePage,
+  today,
+}) {
   const [selectedDate, setSelectedDate] = useState(today);
+  const activeSchedule =
+    calendarTrack === "dsa"
+      ? scheduleDsa
+      : calendarTrack === "sql"
+        ? scheduleSql
+        : scheduleAll;
+
   const monthStart = `${today.slice(0, 7)}-01`;
   const firstWeekday = new Date(`${monthStart}T12:00:00`).getDay();
   const calendarDays = Array.from({ length: 42 }, (_, index) =>
@@ -1466,17 +2005,16 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
     year: "numeric",
   }).format(new Date(`${monthStart}T12:00:00`));
 
-  const selectedReviews = schedule[selectedDate] ?? [];
+  const selectedReviews = activeSchedule[selectedDate] ?? [];
 
   return (
     <section className="page calendar-page">
       <div className="greeting-row">
         <div>
-          <p className="eyebrow">SPACED REPETITION PLAN</p>
+          <p className="eyebrow">SPACED REPETITION SCHEDULE</p>
           <h1>Review calendar</h1>
           <p className="muted">
-            Reviews are scheduled with a 2-problem daily limit. Click any date to
-            inspect planned recalls.
+            Independent 2-problem daily caps per track. Click any date to inspect planned reviews.
           </p>
         </div>
         <button className="primary" onClick={() => setActivePage("Dashboard")}>
@@ -1484,11 +2022,38 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
           Back to dashboard
         </button>
       </div>
+
+      {/* Calendar Track Switcher */}
+      <div className="dashboard-track-bar" style={{ marginBottom: 18 }}>
+        <button
+          className={`dashboard-track-tab ${calendarTrack === "all" ? "active" : ""}`}
+          onClick={() => setCalendarTrack("all")}
+        >
+          All Tracks
+        </button>
+        <button
+          className={`dashboard-track-tab ${calendarTrack === "dsa" ? "active" : ""}`}
+          onClick={() => setCalendarTrack("dsa")}
+        >
+          <Code2 size={14} /> DSA Only (NeetCode 150)
+        </button>
+        <button
+          className={`dashboard-track-tab ${calendarTrack === "sql" ? "active" : ""}`}
+          onClick={() => setCalendarTrack("sql")}
+        >
+          <Database size={14} /> SQL 50 Only
+        </button>
+      </div>
+
       <div className="calendar-layout">
         <div className="calendar-card">
           <div className="calendar-header">
             <h2>{monthName}</h2>
-            <span>Each dot is one scheduled review (max 2/day)</span>
+            <span>
+              {calendarTrack === "all"
+                ? "Dots show scheduled reviews across DSA & SQL"
+                : `Dots show ${calendarTrack.toUpperCase()} reviews (max 2/day)`}
+            </span>
           </div>
           <div className="calendar-weekdays">
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
@@ -1497,7 +2062,7 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
           </div>
           <div className="calendar-grid">
             {calendarDays.map((date) => {
-              const planned = schedule[date] ?? [];
+              const planned = activeSchedule[date] ?? [];
               const inMonth = date.slice(0, 7) === today.slice(0, 7);
               const isSelected = date === selectedDate;
               return (
@@ -1509,10 +2074,16 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
                   <span>{Number(date.slice(-2))}</span>
                   <div className="calendar-dots">
                     {planned.map((problem) => (
-                      <i key={problem.id} title={problem.title} />
+                      <i
+                        key={problem.id}
+                        title={`[${problem.track === "sql" ? "SQL" : "DSA"}] ${problem.title}`}
+                        style={{
+                          background: problem.track === "sql" ? "#0891b2" : "#6366f1",
+                        }}
+                      />
                     ))}
                   </div>
-                  {planned.length > 0 && <small>{planned.length}/2</small>}
+                  {planned.length > 0 && <small>{planned.length}</small>}
                 </div>
               );
             })}
@@ -1535,27 +2106,40 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
           </div>
           {selectedReviews.length ? (
             <div className="agenda-list">
-              {selectedReviews.map((problem) => (
-                <div className="agenda-item" key={problem.id}>
-                  <div className="agenda-number">
-                    {String(problem.id).padStart(2, "0")}
+              {selectedReviews.map((problem) => {
+                const isSql = problem.track === "sql" || problem.id > 1000;
+                return (
+                  <div className="agenda-item" key={problem.id}>
+                    <div className="agenda-number">
+                      {String(problem.id).padStart(2, "0")}
+                    </div>
+                    <div>
+                      <strong>
+                        <a
+                          href={
+                            problem.url ||
+                            (isSql
+                              ? getSqlLeetCodeUrl(problem.title)
+                              : getLeetCodeUrl(problem.title))
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="problem-title-link"
+                          title={`Open "${problem.title}" on LeetCode`}
+                        >
+                          {problem.title} <ArrowUpRight size={12} />
+                        </a>
+                      </strong>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span className={`track-badge ${isSql ? "sql" : "dsa"}`} style={{ fontSize: 9, padding: "1px 5px" }}>
+                          {isSql ? "SQL" : "DSA"}
+                        </span>
+                        {problem.category}
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <strong>
-                      <a
-                        href={problem.url || getLeetCodeUrl(problem.title)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="problem-title-link"
-                        title={`Open "${problem.title}" on LeetCode`}
-                      >
-                        {problem.title} <ArrowUpRight size={12} />
-                      </a>
-                    </strong>
-                    <span>{problem.category}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="empty">Clear for this date.</div>
@@ -1563,8 +2147,7 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
           <div className="calendar-note">
             <CalendarDays size={18} />
             <p>
-              When more than 2 reviews land on the same day, extra reviews
-              automatically roll forward into subsequent days.
+              Each track operates an independent 2-problem cap per day. Recalls automatically roll forward when capacity is reached.
             </p>
           </div>
         </aside>
@@ -1573,19 +2156,23 @@ function ReviewCalendar({ schedule, setActivePage, today }) {
   );
 }
 
-function LearningPath({ problems, setActivePage, setFilter }) {
-  const categoryStats = useMemo(() => {
-    return topics.slice(1).map((category) => {
-      const topicProblems = problems.filter((p) => p.category === category);
+function LearningPath({
+  dsaProblems,
+  sqlProblems,
+  setActivePage,
+  setDsaTopicFilter,
+  setSqlTopicFilter,
+}) {
+  const [currentRoadmap, setCurrentRoadmap] = useState("dsa");
+
+  const dsaCategoryStats = useMemo(() => {
+    return dsaTopics.slice(1).map((category) => {
+      const topicProblems = dsaProblems.filter((p) => p.category === category);
       const total = topicProblems.length;
       const solved = topicProblems.filter((p) => p.solvedAt).length;
-      const mastered = topicProblems.filter(
-        (p) => p.status === "mastered",
-      ).length;
+      const mastered = topicProblems.filter((p) => p.status === "mastered").length;
       const easy = topicProblems.filter((p) => p.difficulty === "Easy").length;
-      const medium = topicProblems.filter(
-        (p) => p.difficulty === "Medium",
-      ).length;
+      const medium = topicProblems.filter((p) => p.difficulty === "Medium").length;
       const hard = topicProblems.filter((p) => p.difficulty === "Hard").length;
 
       return {
@@ -1599,7 +2186,32 @@ function LearningPath({ problems, setActivePage, setFilter }) {
         percent: total ? Math.round((solved / total) * 100) : 0,
       };
     });
-  }, [problems]);
+  }, [dsaProblems]);
+
+  const sqlCategoryStats = useMemo(() => {
+    return sqlTopics.slice(1).map((category) => {
+      const topicProblems = sqlProblems.filter((p) => p.category === category);
+      const total = topicProblems.length;
+      const solved = topicProblems.filter((p) => p.solvedAt).length;
+      const mastered = topicProblems.filter((p) => p.status === "mastered").length;
+      const easy = topicProblems.filter((p) => p.difficulty === "Easy").length;
+      const medium = topicProblems.filter((p) => p.difficulty === "Medium").length;
+      const hard = topicProblems.filter((p) => p.difficulty === "Hard").length;
+
+      return {
+        category,
+        total,
+        solved,
+        mastered,
+        easy,
+        medium,
+        hard,
+        percent: total ? Math.round((solved / total) * 100) : 0,
+      };
+    });
+  }, [sqlProblems]);
+
+  const activeStats = currentRoadmap === "dsa" ? dsaCategoryStats : sqlCategoryStats;
 
   return (
     <section className="page learning-path-page">
@@ -1608,7 +2220,9 @@ function LearningPath({ problems, setActivePage, setFilter }) {
           <p className="eyebrow">CURRICULUM ROADMAP</p>
           <h1>Learning path</h1>
           <p className="muted">
-            Master all 18 core topics in the NeetCode curriculum step by step.
+            {currentRoadmap === "dsa"
+              ? "Master all 18 core topics in the NeetCode DSA curriculum step by step."
+              : "Master all 7 canonical categories in the LeetCode SQL 50 study plan."}
           </p>
         </div>
         <button className="primary" onClick={() => setActivePage("Dashboard")}>
@@ -1617,8 +2231,24 @@ function LearningPath({ problems, setActivePage, setFilter }) {
         </button>
       </div>
 
+      {/* Roadmap Switcher */}
+      <div className="dashboard-track-bar" style={{ marginBottom: 20 }}>
+        <button
+          className={`dashboard-track-tab ${currentRoadmap === "dsa" ? "active" : ""}`}
+          onClick={() => setCurrentRoadmap("dsa")}
+        >
+          <Code2 size={15} /> DSA Roadmap (18 Topics • 150 Problems)
+        </button>
+        <button
+          className={`dashboard-track-tab ${currentRoadmap === "sql" ? "active" : ""}`}
+          onClick={() => setCurrentRoadmap("sql")}
+        >
+          <Database size={15} /> SQL 50 Roadmap (7 Topics • 50 Problems)
+        </button>
+      </div>
+
       <div className="learning-path-grid">
-        {categoryStats.map((item) => (
+        {activeStats.map((item) => (
           <article className="learning-card" key={item.category}>
             <div className="learning-card-header">
               <h3>{item.category}</h3>
@@ -1663,8 +2293,13 @@ function LearningPath({ problems, setActivePage, setFilter }) {
             <div className="learning-card-footer">
               <button
                 onClick={() => {
-                  setFilter(item.category);
-                  setActivePage("My problems");
+                  if (currentRoadmap === "dsa") {
+                    setDsaTopicFilter(item.category);
+                    setActivePage("DSA Problems");
+                  } else {
+                    setSqlTopicFilter(item.category);
+                    setActivePage("SQL 50");
+                  }
                 }}
               >
                 Study {item.category} <ChevronRight size={14} />
@@ -1678,18 +2313,23 @@ function LearningPath({ problems, setActivePage, setFilter }) {
 }
 
 function ProblemsPage({
-  problems,
-  allProblems,
-  totalCount,
-  filter,
+  track,
+  trackTitle,
+  trackEyebrow,
+  trackDescription,
+  topics,
+  topicFilter,
+  setTopicFilter,
   difficultyFilter,
   setDifficultyFilter,
   statusFilter,
   setStatusFilter,
+  problems,
+  allProblems,
+  totalCount,
   expandedNotesId,
   setExpandedNotesId,
   query,
-  setFilter,
   setModalOpen,
   onOpenNotes,
   review,
@@ -1700,6 +2340,8 @@ function ProblemsPage({
   today,
   onOpenHistory,
 }) {
+  const isSql = track === "sql";
+
   const diffStats = useMemo(() => {
     const list = ["Easy", "Medium", "Hard"];
     return list.map((diff) => {
@@ -1722,13 +2364,9 @@ function ProblemsPage({
     <section className="page problems-page">
       <div className="greeting-row">
         <div>
-          <p className="eyebrow">YOUR LIBRARY</p>
-          <h1>My problems</h1>
-          <p className="muted">
-            Browse all {totalCount} curated problems. Filter by topic,
-            difficulty, or solved status. Click any problem to open it directly
-            on LeetCode, or expand notes to review Python solutions.
-          </p>
+          <p className="eyebrow">{trackEyebrow}</p>
+          <h1>{trackTitle}</h1>
+          <p className="muted">{trackDescription}</p>
         </div>
         <button className="primary" onClick={() => setModalOpen(true)}>
           <Plus size={18} />
@@ -1821,8 +2459,8 @@ function ProblemsPage({
           {topics.map((topic) => (
             <button
               key={topic}
-              onClick={() => setFilter(topic)}
-              className={filter === topic ? "selected" : ""}
+              onClick={() => setTopicFilter(topic)}
+              className={topicFilter === topic ? "selected" : ""}
             >
               {topic}
             </button>
@@ -1831,13 +2469,13 @@ function ProblemsPage({
       </div>
 
       {(query ||
-        filter !== "All topics" ||
+        topicFilter !== "All topics" ||
         difficultyFilter !== "All" ||
         statusFilter !== "All") && (
         <p className="muted" style={{ margin: "0 0 16px" }}>
           Showing {problems.length} problem{problems.length === 1 ? "" : "s"}
           {statusFilter !== "All" ? ` (${statusFilter})` : ""}
-          {filter !== "All topics" ? ` in ${filter}` : ""}
+          {topicFilter !== "All topics" ? ` in ${topicFilter}` : ""}
           {difficultyFilter !== "All" ? ` • ${difficultyFilter}` : ""}
           {query ? ` matching “${query}”` : ""}
         </p>
@@ -1853,7 +2491,7 @@ function ProblemsPage({
           <span style={{ textAlign: "right" }}>ACTIONS</span>
         </div>
         {problems.map((problem) => {
-          const isSolved = Boolean(problem.solvedAt);
+          const isProblemSolved = Boolean(problem.solvedAt);
           const history = getSolveHistory(problem);
           const solveCount = history.length;
           const lastDate = getLastSolvedDate(problem);
@@ -1866,28 +2504,36 @@ function ProblemsPage({
           );
           const wasReviewedToday = problem.lastReviewed === today;
           const hasNotes = Boolean(
-            problem.pythonCode || problem.timeComplexity || problem.notes,
+            problem.sqlCode ||
+              problem.pythonCode ||
+              problem.timeComplexity ||
+              problem.notes,
           );
+          const leetCodeUrl =
+            problem.url ||
+            (isSql
+              ? getSqlLeetCodeUrl(problem.title)
+              : getLeetCodeUrl(problem.title));
 
           return (
             <div className="table-row-wrapper" key={problem.id}>
-              <div className={`table-row ${isSolved ? "is-solved" : ""}`}>
+              <div className={`table-row ${isProblemSolved ? "is-solved" : ""}`}>
                 <div className="problem-cell">
                   <button
-                    className={`solved-check-btn ${isSolved ? "checked" : ""}`}
+                    className={`solved-check-btn ${isProblemSolved ? "checked" : ""}`}
                     onClick={() =>
-                      isSolved ? resetProblem(problem) : markSolved(problem)
+                      isProblemSolved ? resetProblem(problem) : markSolved(problem)
                     }
                     title={
-                      isSolved
+                      isProblemSolved
                         ? "Mark as unsolved"
                         : "Mark as solved today"
                     }
                     aria-label={
-                      isSolved ? "Mark as unsolved" : "Mark as solved"
+                      isProblemSolved ? "Mark as unsolved" : "Mark as solved"
                     }
                   >
-                    {isSolved ? (
+                    {isProblemSolved ? (
                       <CheckCircle2 size={18} />
                     ) : (
                       <Circle size={18} />
@@ -1895,7 +2541,7 @@ function ProblemsPage({
                   </button>
                   <div>
                     <a
-                      href={problem.url || getLeetCodeUrl(problem.title)}
+                      href={leetCodeUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="problem-title-link"
@@ -1905,6 +2551,10 @@ function ProblemsPage({
                       <ArrowUpRight size={13} />
                     </a>
                     <span className="problem-tags">
+                      <span className={`track-badge ${isSql ? "sql" : "dsa"}`}>
+                        {isSql ? <Database size={10} /> : <Code2 size={10} />}
+                        {isSql ? "SQL" : "DSA"}
+                      </span>
                       {solveCount > 0 && (
                         <button
                           type="button"
@@ -1922,17 +2572,18 @@ function ProblemsPage({
                       {problem.timeComplexity && (
                         <span
                           className="complexity-tag"
-                          title="Time Complexity"
+                          title="Time / Query Complexity"
                         >
                           {problem.timeComplexity}
                         </span>
                       )}
-                      {problem.pythonCode && (
+                      {(problem.sqlCode || problem.pythonCode) && (
                         <span
-                          className="code-tag"
-                          title="Python Solution Added"
+                          className={`code-tag ${isSql ? "sql" : ""}`}
+                          title={isSql ? "SQL Query Solution Saved" : "Python Solution Saved"}
                         >
-                          <Code2 size={11} /> Py
+                          {isSql ? <Database size={11} /> : <Code2 size={11} />}{" "}
+                          {isSql ? "SQL" : "Py"}
                         </span>
                       )}
                     </span>
@@ -1941,9 +2592,9 @@ function ProblemsPage({
 
                 <span>{problem.category}</span>
                 <span
-                  className={`status ${isSolved ? "solved-badge" : problem.status}`}
+                  className={`status ${isProblemSolved ? "solved-badge" : problem.status}`}
                 >
-                  {isSolved ? (
+                  {isProblemSolved ? (
                     <>
                       <Check size={11} /> Solved
                     </>
@@ -2000,7 +2651,7 @@ function ProblemsPage({
                       isExpanded
                         ? "Collapse notes drawer"
                         : hasNotes
-                          ? "View notes & Python code"
+                          ? `View notes & ${isSql ? "SQL" : "Python"} code`
                           : "Add notes & code"
                     }
                   >
@@ -2095,8 +2746,12 @@ function ProblemNotesDrawer({
   onOpenHistory,
   today,
 }) {
+  const isSql = problem.track === "sql" || problem.id > 1000;
   const [copied, setCopied] = useState(false);
-  const hasCode = Boolean(problem.pythonCode && problem.pythonCode.trim());
+  const codeContent = isSql
+    ? problem.sqlCode || problem.pythonCode || ""
+    : problem.pythonCode || "";
+  const hasCode = Boolean(codeContent && codeContent.trim());
   const hasComplexity = Boolean(
     problem.timeComplexity || problem.spaceComplexity,
   );
@@ -2106,8 +2761,8 @@ function ProblemNotesDrawer({
   const lastDate = getLastSolvedDate(problem);
 
   function copyCode() {
-    if (problem.pythonCode) {
-      navigator.clipboard.writeText(problem.pythonCode);
+    if (codeContent) {
+      navigator.clipboard.writeText(codeContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -2134,7 +2789,7 @@ function ProblemNotesDrawer({
               onClick={onEdit}
               style={{ padding: "6px 12px", fontSize: 11 }}
             >
-              <Plus size={14} /> Add Python Solution & Notes
+              <Plus size={14} /> Add {isSql ? "SQL Query" : "Python Solution"} & Notes
             </button>
             <button
               className="undo-button"
@@ -2154,7 +2809,9 @@ function ProblemNotesDrawer({
       <div className="notes-drawer-content">
         <div className="notes-code-card">
           <div className="notes-code-header">
-            <span>🐍 Python 3 Solution</span>
+            <span>
+              {isSql ? "💾 SQL Query Solution" : "🐍 Python 3 Solution"}
+            </span>
             {hasCode && (
               <button
                 className="copy-code-btn"
@@ -2167,7 +2824,7 @@ function ProblemNotesDrawer({
           </div>
           {hasCode ? (
             <pre className="notes-code-pre">
-              <code>{problem.pythonCode}</code>
+              <code>{codeContent}</code>
             </pre>
           ) : (
             <p
@@ -2178,8 +2835,7 @@ function ProblemNotesDrawer({
                 fontSize: 12,
               }}
             >
-              No Python code entered yet. Click "Edit Solution" below to add
-              code.
+              No {isSql ? "SQL query" : "Python code"} entered yet. Click "Edit Solution" below to add code.
             </p>
           )}
         </div>
@@ -2187,18 +2843,18 @@ function ProblemNotesDrawer({
         <div className="notes-meta-card">
           <div className="notes-complexities">
             <div className="complexity-box">
-              <span>⏱ Time Complexity</span>
+              <span>{isSql ? "⏱ Execution / Complexity" : "⏱ Time Complexity"}</span>
               <strong>{problem.timeComplexity || "Not specified"}</strong>
             </div>
             <div className="complexity-box">
-              <span>💾 Space Complexity</span>
+              <span>{isSql ? "💾 Memory / Temp Tables" : "💾 Space Complexity"}</span>
               <strong>{problem.spaceComplexity || "Not specified"}</strong>
             </div>
           </div>
 
           <div className="notes-approach-view">
-            <span>Key Patterns & Approach Notes</span>
-            <p>{problem.notes || "No approach notes written yet."}</p>
+            <span>{isSql ? "Query Logic & Edge Cases" : "Key Patterns & Approach Notes"}</span>
+            <p>{problem.notes || "No notes written yet."}</p>
           </div>
 
           <div className="notes-solve-history-card">
@@ -2277,12 +2933,17 @@ function SolveHistoryModal({
   onRemoveDate,
   today,
 }) {
+  const isSql = problem.track === "sql" || problem.id > 1000;
   const history = getSolveHistory(problem);
   const totalSolves = history.length;
   const lastDate = getLastSolvedDate(problem);
   const firstDate = history.length > 0 ? history[0] : null;
+  const leetCodeUrl =
+    problem.url ||
+    (isSql
+      ? getSqlLeetCodeUrl(problem.title)
+      : getLeetCodeUrl(problem.title));
 
-  // Render list sorted newest to oldest
   const reversedHistory = useMemo(() => {
     return history
       .map((date, originalIndex) => ({ date, originalIndex }))
@@ -2298,7 +2959,9 @@ function SolveHistoryModal({
       >
         <div className="modal-header">
           <div>
-            <p className="eyebrow">SOLVE TIMELINE & LOG</p>
+            <p className="eyebrow">
+              {isSql ? "SQL 50 TIMELINE" : "DSA TIMELINE"} & LOG
+            </p>
             <h2>{problem.title}</h2>
           </div>
           <button
@@ -2311,12 +2974,15 @@ function SolveHistoryModal({
         </div>
 
         <div className="solve-history-meta-bar">
+          <span className={`track-badge ${isSql ? "sql" : "dsa"}`}>
+            {isSql ? "SQL 50" : "DSA"}
+          </span>
           <span className={`difficulty ${problem.difficulty.toLowerCase()}`}>
             {problem.difficulty}
           </span>
           <span className="cat-pill">{problem.category}</span>
           <a
-            href={problem.url || getLeetCodeUrl(problem.title)}
+            href={leetCodeUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="leetcode-link-btn"
@@ -2434,7 +3100,12 @@ function SolveHistoryModal({
 }
 
 function ProblemNotesModal({ problem, onClose, onSave }) {
-  const [pythonCode, setPythonCode] = useState(problem.pythonCode || "");
+  const isSql = problem.track === "sql" || problem.id > 1000;
+  const initialCode = isSql
+    ? problem.sqlCode || problem.pythonCode || ""
+    : problem.pythonCode || "";
+
+  const [code, setCode] = useState(initialCode);
   const [timeComplexity, setTimeComplexity] = useState(
     problem.timeComplexity || "",
   );
@@ -2443,7 +3114,7 @@ function ProblemNotesModal({ problem, onClose, onSave }) {
   );
   const [notes, setNotes] = useState(problem.notes || "");
 
-  const commonTime = [
+  const commonTimeDsa = [
     "O(1)",
     "O(log n)",
     "O(n)",
@@ -2451,7 +3122,21 @@ function ProblemNotesModal({ problem, onClose, onSave }) {
     "O(n²)",
     "O(2ⁿ)",
   ];
-  const commonSpace = ["O(1)", "O(log n)", "O(n)", "O(n²)"];
+  const commonSpaceDsa = ["O(1)", "O(log n)", "O(n)", "O(n²)"];
+
+  const commonTimeSql = [
+    "Index Scan",
+    "O(N)",
+    "Hash Join",
+    "Nested Loop",
+    "O(N log N)",
+  ];
+  const commonSpaceSql = [
+    "O(1)",
+    "O(N) Temp Table",
+    "O(N) Hash Table",
+    "O(1) Streaming",
+  ];
 
   function handleKeyDown(e) {
     if (e.key === "Tab") {
@@ -2462,21 +3147,30 @@ function ProblemNotesModal({ problem, onClose, onSave }) {
       const val = target.value;
       target.value = val.substring(0, start) + "    " + val.substring(end);
       target.selectionStart = target.selectionEnd = start + 4;
-      setPythonCode(target.value);
+      setCode(target.value);
     }
   }
 
   function submit(e) {
     e.preventDefault();
     onSave(problem.id, {
-      pythonCode,
+      sqlCode: isSql ? code : problem.sqlCode || "",
+      pythonCode: !isSql ? code : problem.pythonCode || code,
       timeComplexity,
       spaceComplexity,
       notes,
     });
   }
 
-  const defaultSnippet = `# Python 3 Solution for ${problem.title}
+  const defaultSnippet = isSql
+    ? `-- SQL Query Solution for ${problem.title}
+SELECT
+    
+FROM
+    
+WHERE
+    ;`
+    : `# Python 3 Solution for ${problem.title}
 class Solution:
     def solve(self, *args, **kwargs):
         # Time: ${timeComplexity || "O(n)"}, Space: ${spaceComplexity || "O(1)"}
@@ -2493,6 +3187,7 @@ class Solution:
         <div className="modal-title">
           <div>
             <p className="eyebrow">
+              {isSql ? "SQL 50 • " : "DSA • "}
               {problem.category} • {problem.difficulty}
             </p>
             <h2>{problem.title} — Notes & Solution</h2>
@@ -2504,14 +3199,14 @@ class Solution:
 
         <div className="complexity-row">
           <label>
-            Time Complexity
+            {isSql ? "Query / Execution Efficiency" : "Time Complexity"}
             <input
               value={timeComplexity}
               onChange={(e) => setTimeComplexity(e.target.value)}
-              placeholder="e.g. O(n) or O(n log n)"
+              placeholder={isSql ? "e.g. Index Scan or O(N)" : "e.g. O(n) or O(n log n)"}
             />
             <div className="chip-row">
-              {commonTime.map((chip) => (
+              {(isSql ? commonTimeSql : commonTimeDsa).map((chip) => (
                 <button
                   type="button"
                   key={chip}
@@ -2525,14 +3220,14 @@ class Solution:
           </label>
 
           <label>
-            Space Complexity
+            {isSql ? "Memory / Temp Tables" : "Space Complexity"}
             <input
               value={spaceComplexity}
               onChange={(e) => setSpaceComplexity(e.target.value)}
-              placeholder="e.g. O(1) or O(n)"
+              placeholder={isSql ? "e.g. O(1) or Temp Table" : "e.g. O(1) or O(n)"}
             />
             <div className="chip-row">
-              {commonSpace.map((chip) => (
+              {(isSql ? commonSpaceSql : commonSpaceDsa).map((chip) => (
                 <button
                   type="button"
                   key={chip}
@@ -2548,10 +3243,10 @@ class Solution:
 
         <div className="code-editor-wrap">
           <label>
-            Python Solution Code
+            {isSql ? "SQL Solution Query" : "Python Solution Code"}
             <textarea
-              value={pythonCode}
-              onChange={(e) => setPythonCode(e.target.value)}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={defaultSnippet}
               spellCheck={false}
@@ -2560,12 +3255,18 @@ class Solution:
         </div>
 
         <label>
-          Approach, Key Patterns & Edge Cases
+          {isSql
+            ? "Query Logic, Join Conditions & Edge Cases"
+            : "Approach, Key Patterns & Edge Cases"}
           <textarea
             className="notes-textarea"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="e.g. Two-pointer technique from opposite ends. Handle duplicate elements..."
+            placeholder={
+              isSql
+                ? "e.g. Left join accounts on transaction_id. Handle NULL values with COALESCE..."
+                : "e.g. Two-pointer technique from opposite ends. Handle duplicate elements..."
+            }
           />
         </label>
 
@@ -2585,6 +3286,7 @@ class Solution:
 function AddProblem({ onClose, onAdd }) {
   const [form, setForm] = useState({
     title: "",
+    track: "dsa",
     category: "Arrays & Hashing",
     difficulty: "Medium",
     url: "",
@@ -2593,10 +3295,21 @@ function AddProblem({ onClose, onAdd }) {
   const set = (key, value) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  function handleTrackChange(newTrack) {
+    setForm((current) => ({
+      ...current,
+      track: newTrack,
+      category: newTrack === "sql" ? "Select" : "Arrays & Hashing",
+    }));
+  }
+
   function submit(event) {
     event.preventDefault();
     if (form.title.trim()) onAdd(form);
   }
+
+  const categoryOptions =
+    form.track === "sql" ? sqlTopics.slice(1) : dsaTopics.slice(1);
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -2614,6 +3327,31 @@ function AddProblem({ onClose, onAdd }) {
             <X size={19} />
           </button>
         </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 600 }}>
+            Study Track
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className={`dashboard-track-tab ${form.track === "dsa" ? "active" : ""}`}
+              onClick={() => handleTrackChange("dsa")}
+              style={{ flex: 1, justifyContent: "center" }}
+            >
+              <Code2 size={14} /> DSA (NeetCode)
+            </button>
+            <button
+              type="button"
+              className={`dashboard-track-tab ${form.track === "sql" ? "active" : ""}`}
+              onClick={() => handleTrackChange("sql")}
+              style={{ flex: 1, justifyContent: "center" }}
+            >
+              <Database size={14} /> SQL 50
+            </button>
+          </div>
+        </div>
+
         <label>
           Problem name
           <input
@@ -2621,9 +3359,14 @@ function AddProblem({ onClose, onAdd }) {
             required
             value={form.title}
             onChange={(event) => set("title", event.target.value)}
-            placeholder="e.g. Longest Consecutive Sequence"
+            placeholder={
+              form.track === "sql"
+                ? "e.g. Managers with at Least 5 Direct Reports"
+                : "e.g. Longest Consecutive Sequence"
+            }
           />
         </label>
+
         <div className="form-grid">
           <label>
             Topic
@@ -2631,7 +3374,7 @@ function AddProblem({ onClose, onAdd }) {
               value={form.category}
               onChange={(event) => set("category", event.target.value)}
             >
-              {topics.slice(1).map((topic) => (
+              {categoryOptions.map((topic) => (
                 <option key={topic}>{topic}</option>
               ))}
             </select>
@@ -2676,7 +3419,7 @@ function HelpModal({ onClose }) {
         <div className="modal-title">
           <div>
             <p className="eyebrow">LEARNING SYSTEM</p>
-            <h2>How Spaced Repetition Works</h2>
+            <h2>How Dual-Track Spaced Repetition Works</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose}>
             <X size={19} />
@@ -2694,10 +3437,10 @@ function HelpModal({ onClose }) {
             successful recalls, the problem is marked <b>Mastered</b>.
           </p>
           <p>
-            <strong style={{ color: "var(--ink)" }}>3. Daily Focus Cap:</strong>{" "}
-            To avoid cognitive overload, revision is capped at 2 problems per
-            day. Additional due reviews automatically roll forward into
-            subsequent days.
+            <strong style={{ color: "var(--ink)" }}>3. Independent 2-Problem Daily Caps:</strong>{" "}
+            DSA and SQL 50 each have their own separate <b>2 reviews/day limit</b> (4 total/day max).
+            Reviewing DSA problems does not use up your SQL revision slots and vice versa.
+            Additional due reviews automatically roll forward into subsequent days without penalty.
           </p>
           <p>
             <strong style={{ color: "var(--ink)" }}>4. Instant Undo:</strong> If
@@ -2724,8 +3467,10 @@ function SettingsModal({
   activity,
   setProblems,
   setActivity,
-  problemsCount,
-  masteredCount,
+  dsaCount,
+  sqlCount,
+  masteredDsa,
+  masteredSql,
   dark,
   setDark,
   showToast,
@@ -2734,8 +3479,8 @@ function SettingsModal({
 
   function handleExportBackup() {
     const backupData = {
-      app: "dsa-revision-lab",
-      version: 1,
+      app: "recall-revision-lab",
+      version: 2,
       exportedAt: new Date().toISOString(),
       problems,
       activity,
@@ -2746,7 +3491,7 @@ function SettingsModal({
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `dsa-revision-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `recall-dual-backup-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
     showToast("Downloaded complete data backup (JSON).");
@@ -2766,6 +3511,10 @@ function SettingsModal({
         try {
           localStorage.setItem(
             "recall-problems-v1",
+            JSON.stringify(parsed.problems),
+          );
+          localStorage.setItem(
+            "recall-problems-backup-v1",
             JSON.stringify(parsed.problems),
           );
         } catch {}
@@ -2848,11 +3597,20 @@ function SettingsModal({
               paddingTop: 14,
               fontSize: 12,
               color: "var(--muted)",
+              lineHeight: 1.6,
             }}
           >
-            <span>Total problems in catalog: {problemsCount}</span>
+            <span>
+              <strong>NeetCode 150 (DSA):</strong> {dsaCount} problems ({masteredDsa} mastered)
+            </span>
             <br />
-            <span>Mastered problems: {masteredCount}</span>
+            <span>
+              <strong>LeetCode SQL 50:</strong> {sqlCount} problems ({masteredSql} mastered)
+            </span>
+            <br />
+            <span>
+              <strong>Total Curated Catalog:</strong> {dsaCount + sqlCount} problems ({masteredDsa + masteredSql} mastered)
+            </span>
           </div>
 
           {/* Data Storage & Backup Section */}
@@ -2872,15 +3630,14 @@ function SettingsModal({
 
             <div className="storage-info-box">
               <span>
-                <strong>Persistent Server Sync:</strong> When running locally or
-                on Netlify, all notes, Python solutions, and progress are saved to
-                <code>server/data.json</code> (or Netlify Blobs).
+                <strong>Zero-Data-Loss Architecture:</strong> Your solved problems,
+                notes, SQL queries, and repetition schedules are safely preserved in browser
+                <code>localStorage</code> with rolling backups and bidirectional self-healing sync.
               </span>
               <span>
-                <strong>Clearing Browser Data:</strong> If you clear browser
-                cookies or localStorage, your notes and solved history will{" "}
-                <strong>not disappear</strong> — they are automatically restored
-                from the server upon launch.
+                <strong>Git Pushes & Deployments:</strong> Whenever you push changes or deploy
+                to Netlify, your solved problems and notes will <strong>never vanish</strong>.
+                The app automatically merges your local progress and restores the server cache.
               </span>
             </div>
 
