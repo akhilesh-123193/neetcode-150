@@ -17,7 +17,10 @@ function readData() {
   const knownTitles = new Set(data.problems.map((problem) => problem.title));
   return {
     problems: [
-      ...data.problems,
+      ...data.problems.map((p) => ({
+        ...p,
+        track: p.track || (p.id > 1000 ? "sql" : "dsa"),
+      })),
       ...starterProblems.filter((problem) => !knownTitles.has(problem.title)),
     ],
     activity: data.activity ?? {},
