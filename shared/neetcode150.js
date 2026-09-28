@@ -60,24 +60,4 @@ export const starterProblems = catalog
     timeComplexity: "",
     spaceComplexity: "",
     notes: "",
-    solveHistory: [],
   }));
-
-export function getSolveHistory(problem) {
-  if (!problem) return [];
-  if (Array.isArray(problem.solveHistory) && problem.solveHistory.length > 0) {
-    return problem.solveHistory;
-  }
-  if (problem.solvedAt) {
-    return [problem.solvedAt];
-  }
-  return [];
-}
-
-export function getLastSolvedDate(problem) {
-  const history = getSolveHistory(problem);
-  if (history.length > 0) {
-    return history[history.length - 1];
-  }
-  return problem?.solvedAt || null;
-}
