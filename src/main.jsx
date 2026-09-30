@@ -371,26 +371,16 @@ function App() {
 
   const reviewScheduleDsa = useMemo(
     () => buildReviewSchedule(dsaProblems, today),
-    [dsaProblems, today],
+    [dsaProblems],
   );
   const reviewScheduleSql = useMemo(
     () => buildReviewSchedule(sqlProblems, today),
-    [sqlProblems, today],
+    [sqlProblems],
   );
-  const reviewScheduleAll = useMemo(() => {
-    const combined = {};
-    const allDates = new Set([
-      ...Object.keys(reviewScheduleDsa),
-      ...Object.keys(reviewScheduleSql),
-    ]);
-    for (const date of allDates) {
-      combined[date] = [
-        ...(reviewScheduleDsa[date] || []),
-        ...(reviewScheduleSql[date] || []),
-      ];
-    }
-    return combined;
-  }, [reviewScheduleDsa, reviewScheduleSql]);
+  const reviewScheduleAll = useMemo(
+    () => buildReviewSchedule(problems, today),
+    [problems],
+  );
 
   async function updateProblem(problem, patch) {
     const updated = { ...problem, ...patch };
@@ -530,11 +520,6 @@ function App() {
     const previousProblem = { ...problem };
     let patch;
 
-    const currentHistory = getSolveHistory(problem);
-    const updatedHistory = currentHistory.includes(today)
-      ? currentHistory
-      : [...currentHistory, today];
-
     if (quality === "again") {
       patch = {
         repetitions: 0,
@@ -542,9 +527,6 @@ function App() {
         nextReview: addDays(today, 1),
         lastReviewed: today,
         lastReviewQuality: "again",
-        lastSolvedAt: today,
-        solveHistory: updatedHistory,
-        solvedAt: problem.solvedAt || today,
       };
     } else {
       const nextReps = (problem.repetitions ?? 0) + 1;
@@ -554,9 +536,6 @@ function App() {
         nextReview: getNextReviewDate(today, nextReps),
         lastReviewed: today,
         lastReviewQuality: "good",
-        lastSolvedAt: today,
-        solveHistory: updatedHistory,
-        solvedAt: problem.solvedAt || today,
       };
     }
 
@@ -591,17 +570,12 @@ function App() {
     if (matchingAction) {
       undoSpecificAction(matchingAction);
     } else {
-      const currentHistory = getSolveHistory(problem);
-      const updatedHistory = currentHistory.filter((d) => d !== today);
-      const lastSolved = updatedHistory[updatedHistory.length - 1] || null;
       const patch = {
         lastReviewed: null,
         lastReviewQuality: null,
         nextReview: today,
         repetitions: Math.max(0, (problem.repetitions || 1) - 1),
         status: "review",
-        lastSolvedAt: lastSolved,
-        solveHistory: updatedHistory,
       };
       updateProblem(problem, patch);
       recordActivity(-1);
@@ -2156,16 +2130,11 @@ function ReviewCalendar({
                           {problem.title} <ArrowUpRight size={12} />
                         </a>
                       </strong>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                         <span className={`track-badge ${isSql ? "sql" : "dsa"}`} style={{ fontSize: 9, padding: "1px 5px" }}>
                           {isSql ? "SQL" : "DSA"}
                         </span>
-                        <span style={{ color: "var(--muted)", fontSize: 11 }}>{problem.category}</span>
-                        {problem.lastReviewed === selectedDate && (
-                          <span className="reviewed-badge" style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4 }}>
-                            <Check size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 2 }} /> Completed
-                          </span>
-                        )}
+                        {problem.category}
                       </span>
                     </div>
                   </div>

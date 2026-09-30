@@ -44,18 +44,10 @@ export function mergeSingleProblem(serverProb, localProb, defaultProb) {
   if ((isLocalSolved || localHasContent) && !isServerSolved && !serverHasContent) {
     const history =
       Array.isArray(localProb.solveHistory) && localProb.solveHistory.length > 0
-        ? [...localProb.solveHistory]
+        ? localProb.solveHistory
         : localProb.solvedAt
           ? [localProb.solvedAt]
           : [];
-    if (localProb.lastReviewed && !history.includes(localProb.lastReviewed)) {
-      history.push(localProb.lastReviewed);
-      history.sort();
-    }
-    const lastSolved =
-      history.length > 0
-        ? history[history.length - 1]
-        : localProb.lastSolvedAt || localProb.solvedAt || null;
     return {
       ...defaultProb,
       ...localProb,
@@ -65,8 +57,12 @@ export function mergeSingleProblem(serverProb, localProb, defaultProb) {
         (defaultProb.id > 1000 ? "sql" : "dsa"),
       url: defaultProb.url || localProb.url,
       solveHistory: history,
-      solvedAt: localProb.solvedAt || lastSolved,
-      lastSolvedAt: lastSolved,
+      solvedAt:
+        localProb.solvedAt || (history.length > 0 ? history[history.length - 1] : null),
+      lastSolvedAt:
+        localProb.lastSolvedAt ||
+        localProb.solvedAt ||
+        (history.length > 0 ? history[history.length - 1] : null),
       status: localProb.status || (history.length > 0 ? "learning" : "new"),
       repetitions: localProb.repetitions || 0,
       nextReview: localProb.nextReview || null,
@@ -87,18 +83,10 @@ export function mergeSingleProblem(serverProb, localProb, defaultProb) {
   if ((isServerSolved || serverHasContent) && !isLocalSolved && !localHasContent) {
     const history =
       Array.isArray(serverProb.solveHistory) && serverProb.solveHistory.length > 0
-        ? [...serverProb.solveHistory]
+        ? serverProb.solveHistory
         : serverProb.solvedAt
           ? [serverProb.solvedAt]
           : [];
-    if (serverProb.lastReviewed && !history.includes(serverProb.lastReviewed)) {
-      history.push(serverProb.lastReviewed);
-      history.sort();
-    }
-    const lastSolved =
-      history.length > 0
-        ? history[history.length - 1]
-        : serverProb.lastSolvedAt || serverProb.solvedAt || null;
     return {
       ...defaultProb,
       ...serverProb,
@@ -108,8 +96,12 @@ export function mergeSingleProblem(serverProb, localProb, defaultProb) {
         (defaultProb.id > 1000 ? "sql" : "dsa"),
       url: defaultProb.url || serverProb.url,
       solveHistory: history,
-      solvedAt: serverProb.solvedAt || lastSolved,
-      lastSolvedAt: lastSolved,
+      solvedAt:
+        serverProb.solvedAt || (history.length > 0 ? history[history.length - 1] : null),
+      lastSolvedAt:
+        serverProb.lastSolvedAt ||
+        serverProb.solvedAt ||
+        (history.length > 0 ? history[history.length - 1] : null),
       status: serverProb.status || (history.length > 0 ? "learning" : "new"),
       repetitions: serverProb.repetitions || 0,
       nextReview: serverProb.nextReview || null,
@@ -127,27 +119,20 @@ export function mergeSingleProblem(serverProb, localProb, defaultProb) {
 
   // If BOTH have data: union their solve history, preserve highest repetition & latest review
   const sHistory = Array.isArray(serverProb?.solveHistory)
-    ? [...serverProb.solveHistory]
+    ? serverProb.solveHistory
     : serverProb?.solvedAt
       ? [serverProb.solvedAt]
       : [];
-  if (serverProb?.lastReviewed && !sHistory.includes(serverProb.lastReviewed)) {
-    sHistory.push(serverProb.lastReviewed);
-  }
   const lHistory = Array.isArray(localProb?.solveHistory)
-    ? [...localProb.solveHistory]
+    ? localProb.solveHistory
     : localProb?.solvedAt
       ? [localProb.solvedAt]
       : [];
-  if (localProb?.lastReviewed && !lHistory.includes(localProb.lastReviewed)) {
-    lHistory.push(localProb.lastReviewed);
-  }
   const combinedHistory = Array.from(new Set([...sHistory, ...lHistory])).sort();
   const lastSolved =
     combinedHistory[combinedHistory.length - 1] ||
     serverProb?.lastSolvedAt ||
     localProb?.lastSolvedAt ||
-    null;
     null;
 
   const maxReps = Math.max(serverProb?.repetitions || 0, localProb?.repetitions || 0);
