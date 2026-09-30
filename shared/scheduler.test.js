@@ -5,6 +5,7 @@ import {
   buildHeatmap,
   buildReviewSchedule,
   calculateStreak,
+  compareDueProblems,
   getDueReviews,
   getNextReviewDate,
   intervals,
@@ -16,11 +17,13 @@ import {
 } from "./dataMerge.js";
 
 const today = "2026-09-23";
-const problem = (id, nextReview, status = "review") => ({
+const problem = (id, nextReview, status = "review", lastReviewed = null) => ({
   id,
   title: `Problem ${id}`,
   status,
   nextReview,
+  lastReviewed,
+  repetitions: 0,
 });
 
 test("prioritizes only the two oldest due reviews", () => {
@@ -155,6 +158,85 @@ test("supports independent 2-problem daily revision caps for DSA and SQL tracks"
 
   assert.equal(dueSql.length, 2);
   assert.deepEqual(dueSql.map((p) => p.id), [1001, 1002]);
+});
+
+test("synchronizes review calendar with dashboard reviews for today", () => {
+  const p1 = { id: 1, title: "P1", status: "review", nextReview: "2026-09-20", lastReviewed: today };
+  const p2 = { id: 2, title: "P2", status: "review", nextReview: "2026-09-20", lastReviewed: today };
+  const p3 = { id: 3, title: "P3", status: "review", nextReview: "2026-09-21", lastReviewed: null };
+  const p4 = { id: 4, title: "P4", status: "review", nextReview: "2026-09-21", lastReviewed: null };
+  const p5 = { id: 5, title: "P5", status: "review", nextReview: "2026-09-22", lastReviewed: null };
+
+  // Case 1: User has reviewed 2 problems today (p1, p2)
+  const scheduleCompleted = buildReviewSchedule([p1, p2, p3, p4, p5], today, 7, 2);
+  // Today's calendar must show the 2 problems actually completed today (p1, p2)
+  assert.deepEqual(scheduleCompleted[today].map((p) => p.id), [1, 2]);
+  // The remaining overdue problems (p3, p4) roll forward to tomorrow!
+  assert.deepEqual(scheduleCompleted[addDays(today, 1)].map((p) => p.id), [3, 4]);
+  // The next day has p5
+  assert.deepEqual(scheduleCompleted[addDays(today, 2)].map((p) => p.id), [5]);
+
+  // Case 2: User has reviewed 0 problems today
+  const unreviewedProblems = [
+    { ...p1, lastReviewed: null },
+    { ...p2, lastReviewed: null },
+    p3,
+    p4,
+    p5,
+  ];
+  const scheduleFresh = buildReviewSchedule(unreviewedProblems, today, 7, 2);
+  const dueOnDashboard = getDueReviews(unreviewedProblems, today, 2);
+  // Today's calendar must match the dashboard's due items exactly
+  assert.deepEqual(
+    scheduleFresh[today].map((p) => p.id),
+    dueOnDashboard.map((p) => p.id),
+  );
+  assert.deepEqual(scheduleFresh[today].map((p) => p.id), [1, 2]);
+  // p3, p4 roll to tomorrow
+  assert.deepEqual(scheduleFresh[addDays(today, 1)].map((p) => p.id), [3, 4]);
+});
+
+test("equal importance and fair rotation: prioritizes least recently reviewed, fewest repetitions, and prevents starvation", () => {
+  // All 4 problems have the SAME overdue nextReview date
+  const candidateA = { id: 10, title: "Zebra Problem", nextReview: "2026-09-20", lastReviewed: "2026-09-10", repetitions: 1 };
+  const candidateB = { id: 20, title: "Alpha Problem", nextReview: "2026-09-20", lastReviewed: "2026-09-18", repetitions: 1 };
+  const candidateC = { id: 30, title: "Beta Problem",  nextReview: "2026-09-20", lastReviewed: "2026-09-10", repetitions: 0 };
+  const candidateD = { id: 40, title: "Gamma Problem", nextReview: "2026-09-20", lastReviewed: "2026-09-10", repetitions: 1 };
+
+  // Candidate C was touched on Sep 10 and has 0 repetitions -> must be highest priority!
+  // Candidate A was touched on Sep 10, has 1 repetition, id 10 -> beats candidate D (id 40)
+  // Candidate B was touched on Sep 18 (much more recently) -> lowest priority!
+  const sorted = [candidateA, candidateB, candidateC, candidateD].sort((x, y) => compareDueProblems(x, y, today));
+
+  assert.equal(sorted[0].id, 30); // candidate C (least touched date + fewest reps)
+  assert.equal(sorted[1].id, 10); // candidate A (least touched date, reps 1, id 10)
+  assert.equal(sorted[2].id, 40); // candidate D (least touched date, reps 1, id 40)
+  assert.equal(sorted[3].id, 20); // candidate B (touched most recently, so fair rotation defers it)
+});
+
+test("retroactively updates solveHistory and lastSolvedAt when problem has lastReviewed", async () => {
+  const { starterProblems } = await import("./neetcode150.js");
+
+  // Problem was solved on Sep 23, but reviewed on Sep 30 without solveHistory updated
+  const localProblems = [
+    {
+      id: 1,
+      title: "Two Sum",
+      track: "dsa",
+      status: "review",
+      repetitions: 2,
+      solvedAt: "2026-09-23",
+      solveHistory: ["2026-09-23"],
+      lastReviewed: "2026-09-30",
+      nextReview: "2026-10-07",
+    },
+  ];
+
+  const merged = mergeProblems([], localProblems, starterProblems);
+  const twoSum = merged.find((p) => p.title === "Two Sum");
+
+  assert.equal(twoSum.lastSolvedAt, "2026-09-30");
+  assert.deepEqual(twoSum.solveHistory, ["2026-09-23", "2026-09-30"]);
 });
 
 test("preserves local solves and notes when server returns blank starter problems after git push / redeploy", async () => {
